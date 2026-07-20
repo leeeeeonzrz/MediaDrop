@@ -65,6 +65,7 @@ assert(packageConfig.build.extraResources.some((entry) => entry.to === "bin"), "
 const pyinstallerSpec = fs.readFileSync(path.join(__dirname, "..", "app", "mediadrop-server.spec"), "utf8");
 assert(pyinstallerSpec.includes("('templates', 'templates')"), "PyInstaller no longer bundles templates");
 assert(pyinstallerSpec.includes("('static', 'static')"), "PyInstaller no longer bundles static files");
+assert(pyinstallerSpec.includes("('fonts', 'fonts')"), "PyInstaller no longer bundles subtitle fonts");
 const flaskSource = fs.readFileSync(path.join(__dirname, "..", "app", "app.py"), "utf8");
 assert(!flaskSource.includes("'unsafe-inline'"), "Content security policy still allows inline code");
 assert(flaskSource.includes("script-src 'self';") && flaskSource.includes("style-src 'self';"), "Strict local script and style policy is missing");
@@ -79,6 +80,8 @@ assert(!buildWorkflow.includes("ffmpeg-master-latest"), "Release workflow still 
 assert(buildWorkflow.includes("ffmpeg-n8.1-latest-${{ matrix.ffmpeg_arch }}-gpl-8.1.zip"), "Windows FFmpeg stable asset is missing");
 assert(buildWorkflow.includes("9f4b7be573fc9a7ade892224b756f7ae733b49c4eba46c2eab77c1a76b9f36a2"), "Windows x64 FFmpeg checksum is missing");
 assert(buildWorkflow.includes("11b5555e29b71908d88959f34d79c1e356f7ff6ee349c066f899146245d51bc7"), "Windows ARM64 FFmpeg checksum is missing");
+assert(buildWorkflow.includes("Roboto-OFL.txt"), "Release builds no longer verify the Roboto license");
+assert(buildWorkflow.includes("NotoSansCJK-OFL.txt"), "Release builds no longer verify the Noto license");
 
 const macFfmpegBuild = fs.readFileSync(path.join(__dirname, "build-ffmpeg-macos.sh"), "utf8");
 assert(macFfmpegBuild.includes("FFMPEG_VERSION=\"8.1.2\""), "macOS FFmpeg version is not pinned");

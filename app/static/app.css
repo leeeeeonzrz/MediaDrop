@@ -376,6 +376,7 @@ textarea::placeholder { color: var(--muted); }
 .advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin-top: 9px; }
 .advanced-grid label { color: var(--muted); font-size: 0.68rem; }
 .advanced-grid .select-field, .advanced-grid .text-field { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: center; gap: 7px; }
+.advanced-grid .field-help { grid-column: 2; margin-top: 0; }
 .advanced-grid .check-field { display: flex; align-items: center; gap: 6px; min-height: 30px; }
 .advanced-grid select, .advanced-grid input[type="text"] { min-width: 0; width: 100%; height: 30px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--soft); color: var(--fg); padding: 0 7px; }
 

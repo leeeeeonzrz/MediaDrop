@@ -344,11 +344,14 @@ function fmtEtaDuration(seconds) {
   return `${secs} 秒`;
 }
 
-function progressPhaseLabel(phase) {
+function progressPhaseLabel(phase, progress = {}) {
   const labels = {
     merging: '正在合并音视频',
     converting_audio: '正在转换 MP3',
     converting_thumbnail: '正在转换封面',
+    burning_subtitles: progress.hardware_accelerated
+      ? '正在使用 GPU 将字幕烧录到视频画面'
+      : '正在使用 CPU 将字幕烧录到视频画面',
     postprocessing: '正在处理媒体',
     complete: '处理完成',
   };
@@ -357,7 +360,7 @@ function progressPhaseLabel(phase) {
 
 function fmtEtaEstimate(progress, isPaused) {
   if (isPaused || progress.state === 'paused') return '估算已暂停';
-  const phaseLabel = progressPhaseLabel(progress.phase);
+  const phaseLabel = progressPhaseLabel(progress.phase, progress);
   if (phaseLabel) return phaseLabel;
   if (progress.state === 'stalled') return '网络波动，正在重新估算';
 
@@ -392,10 +395,14 @@ function buildDownloadRequest(card, format = card.format || 'video') {
   const options = card.options || {};
   let requestOptions = {};
   if (format === 'video') {
+    const selectedFormat = (card.formats || []).find(item => item.id === card.selectedFormatId);
     requestOptions = {
       container: options.container || 'mp4',
-      subtitles: Boolean(options.subtitles),
+      subtitle_mode: options.subtitle_mode || (options.subtitles ? 'embed' : 'none'),
+      subtitles: (options.subtitle_mode || (options.subtitles ? 'embed' : 'none')) === 'embed',
       subtitle_languages: options.subtitle_languages || 'zh.*,en.*',
+      burn_subtitle_language: options.burn_subtitle_language || '',
+      source_is_hdr: Boolean(selectedFormat?.hdr),
       metadata: Boolean(options.metadata),
       chapters: Boolean(options.chapters),
       embed_thumbnail: Boolean(options.embed_thumbnail),
@@ -490,6 +497,13 @@ function friendlyError(err) {
   if (err.includes('No URL provided')) return '请先输入媒体链接';
   if (err.includes('Invalid URL')) return '链接格式无效';
   if (err.includes('Invalid video range mode')) return '动态范围选项无效';
+  if (err.includes('Select one subtitle language to burn')) return '请选择一种要烧录到画面的字幕语言';
+  if (err.includes('Burned subtitles currently support SDR video only')) return '硬字幕当前仅支持 SDR 视频';
+  if (err.includes('Selected subtitle language was not downloaded')) return '没有下载到所选语种的字幕';
+  if (err.includes('does not include libass')) return '内置 FFmpeg 不支持字幕渲染';
+  if (err.includes('Bundled subtitle font is missing')) return '应用缺少硬字幕字体文件';
+  if (err.includes('Could not convert subtitle for burning')) return '无法转换所选字幕';
+  if (err.includes('Could not burn subtitle into video')) return '无法将字幕烧录到视频画面';
   if (err.includes('Job not found')) return '未找到下载任务';
   if (err.includes('File not ready')) return '文件尚未准备完成';
   if (err.includes('Access denied')) return '没有权限访问该文件';
@@ -548,12 +562,19 @@ async function go() {
           uploader: data.uploader || '',
           formats: data.formats || [],
           hasHdr: Boolean(data.has_hdr),
+          subtitleTracks: data.subtitle_tracks || [],
           skipBrowserCookies: Boolean(data.skip_browser_cookies),
           cookieWarning: data.cookie_warning || '',
           videoRangeMode: 'auto',
           selectedFormatId: null,
           preset: 'recommended',
-          options: { container: 'mp4', audio_quality: '192', subtitle_languages: 'zh.*,en.*' },
+          options: {
+            container: 'mp4',
+            audio_quality: '192',
+            subtitle_mode: 'none',
+            subtitle_languages: 'zh.*,en.*',
+            burn_subtitle_language: '',
+          },
           completedDownloads: {},
         };
       }
@@ -640,9 +661,10 @@ function renderCard(idx) {
   </div>`;
 
   const rangeMode = c.videoRangeMode || 'auto';
+  const burnsSubtitles = (c.options?.subtitle_mode || 'none') === 'burn';
   const rangePills = `<div class="range-pills">
-    <button class="range-pill${rangeMode === 'auto' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="auto">自动</button>
-    <button class="range-pill${rangeMode === 'hdr' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="hdr"${c.hasHdr ? '' : ' disabled'}>仅 HDR</button>
+    <button class="range-pill${rangeMode === 'auto' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="auto"${burnsSubtitles ? ' disabled' : ''}>自动</button>
+    <button class="range-pill${rangeMode === 'hdr' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="hdr"${c.hasHdr && !burnsSubtitles ? '' : ' disabled'}>仅 HDR</button>
     <button class="range-pill${rangeMode === 'sdr' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="sdr">仅 SDR</button>
   </div>`;
 
@@ -671,13 +693,19 @@ function renderCard(idx) {
   }
 
   const options = c.options || {};
+  const subtitleMode = options.subtitle_mode || (options.subtitles ? 'embed' : 'none');
+  const subtitleTracks = c.subtitleTracks || [];
+  const subtitleTrackOptions = subtitleTracks.map(track => {
+    const label = `${track.name || track.code} (${track.code})${track.automatic ? ' · 自动字幕' : ''}`;
+    return `<option value="${attr(track.code)}"${options.burn_subtitle_language === track.code ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
   const advancedOptions = `<details class="advanced-options">
     <summary>高级选项</summary>
     <div class="advanced-grid">
       ${!isAudio && !isImage ? `<label class="select-field"><span>封装</span><select data-change-action="set-option" data-index="${idx}" data-option="container"><option value="mp4"${options.container === 'mp4' ? ' selected' : ''}>MP4</option><option value="mkv"${options.container === 'mkv' ? ' selected' : ''}>MKV</option><option value="webm"${options.container === 'webm' ? ' selected' : ''}>WebM</option></select></label>` : ''}
       ${isAudio ? `<label class="select-field"><span>音质</span><select data-change-action="set-option" data-index="${idx}" data-option="audio_quality"><option value="128"${options.audio_quality === '128' ? ' selected' : ''}>128 kbps</option><option value="192"${(options.audio_quality || '192') === '192' ? ' selected' : ''}>192 kbps</option><option value="256"${options.audio_quality === '256' ? ' selected' : ''}>256 kbps</option><option value="320"${options.audio_quality === '320' ? ' selected' : ''}>320 kbps</option></select></label>` : ''}
       ${!isImage ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="metadata"${options.metadata ? ' checked' : ''}>写入元数据</label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="embed_thumbnail"${options.embed_thumbnail ? ' checked' : ''}>嵌入封面</label>` : ''}
-      ${!isAudio && !isImage ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="subtitles"${options.subtitles ? ' checked' : ''}>嵌入字幕</label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label><label class="text-field"><span>字幕语言</span><input type="text" value="${attr(options.subtitle_languages || 'zh.*,en.*')}" data-change-action="set-option" data-index="${idx}" data-option="subtitle_languages"></label>` : ''}
+      ${!isAudio && !isImage ? `<label class="select-field"><span>字幕处理</span><select data-change-action="set-subtitle-mode" data-index="${idx}"><option value="none"${subtitleMode === 'none' ? ' selected' : ''}>不处理字幕</option><option value="embed"${subtitleMode === 'embed' ? ' selected' : ''}>嵌入为可切换字幕</option><option value="burn"${subtitleMode === 'burn' ? ' selected' : ''}>烧录到视频画面</option></select></label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label>${subtitleMode === 'embed' ? `<label class="text-field"><span>字幕语言</span><input type="text" value="${attr(options.subtitle_languages || 'zh.*,en.*')}" data-change-action="set-option" data-index="${idx}" data-option="subtitle_languages"></label>` : ''}${subtitleMode === 'burn' ? `<label class="select-field"><span>烧录语言</span><select data-change-action="set-option" data-index="${idx}" data-option="burn_subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${subtitleTrackOptions}</select><span class="field-help">硬字幕会重新编码视频，并永久显示在画面中；当前仅支持 SDR。</span></label>` : ''}` : ''}
     </div>
   </details>`;
 
@@ -706,7 +734,7 @@ function renderCard(idx) {
     const total = p.total ? fmtSize(p.total) : '';
     const isPaused = c.status === 'paused';
     const statusIcon = isPaused ? '⏸' : '<span class="spin"></span>';
-    const phaseLabel = progressPhaseLabel(p.phase);
+    const phaseLabel = progressPhaseLabel(p.phase, p);
     const etaText = fmtEtaEstimate(p, isPaused);
     const progressDetail = phaseLabel ? etaText : [speed, etaText].filter(Boolean).join(' · ');
     const totalText = p.total_is_estimate ? `约 ${total}` : total;
@@ -834,8 +862,23 @@ function setOption(idx, key, value) {
   cardData[idx].options = { ...(cardData[idx].options || {}), [key]: value };
 }
 
+function setSubtitleMode(idx, mode) {
+  const c = cardData[idx];
+  c.options = { ...(c.options || {}), subtitle_mode: mode, subtitles: mode === 'embed' };
+  if (mode === 'burn') {
+    c.videoRangeMode = 'sdr';
+    const selected = (c.formats || []).find(item => item.id === c.selectedFormatId);
+    if (selected?.hdr) {
+      c.selectedFormatId = null;
+      c.preset = 'recommended';
+    }
+  }
+  renderCard(idx);
+}
+
 function setVideoRangeMode(idx, mode) {
   const c = cardData[idx];
+  if ((c.options?.subtitle_mode || 'none') === 'burn' && mode !== 'sdr') return;
   c.videoRangeMode = mode;
   c.selectedFormatId = null;
   if (c.preset === 'custom') c.preset = 'recommended';
@@ -846,6 +889,13 @@ async function dlCard(idx) {
   const c = cardData[idx];
   const requestedFormat = currentCardFormat(idx);
   c.activeRequest = buildDownloadRequest(c, requestedFormat);
+  if (c.activeRequest.options?.subtitle_mode === 'burn' &&
+      !c.activeRequest.options?.burn_subtitle_language) {
+    c.status = 'error';
+    c.error = 'Select one subtitle language to burn';
+    renderCard(idx);
+    return;
+  }
   c.status = 'downloading';
   c.error = null;
   c.progress = {};
@@ -1083,6 +1133,9 @@ document.addEventListener('change', event => {
     case 'save-concurrency': void saveConcurrency(); break;
     case 'change-auth-mode': void changeAuthMode(); break;
     case 'save-cookies': void saveCookies(); break;
+    case 'set-subtitle-mode':
+      setSubtitleMode(Number(target.dataset.index), target.value);
+      break;
     case 'set-option':
       setOption(
         Number(target.dataset.index),
