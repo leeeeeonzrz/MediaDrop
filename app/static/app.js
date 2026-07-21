@@ -161,6 +161,67 @@ async function browseCookieFile() {
   }
 }
 
+function setLocalBurnStatus(kind, message) {
+  const status = document.getElementById('localBurnStatus');
+  status.className = `local-burn-status ${kind || ''}`;
+  status.textContent = message || '';
+}
+
+async function browseLocalVideo() {
+  if (!window.electronAPI?.selectLocalVideo) {
+    setLocalBurnStatus('error', '本地文件选择仅可在桌面应用中使用');
+    return;
+  }
+  const file = await window.electronAPI.selectLocalVideo();
+  if (file) {
+    document.getElementById('localVideoPath').value = file;
+    setLocalBurnStatus('', '');
+  }
+}
+
+async function browseLocalSubtitle() {
+  if (!window.electronAPI?.selectLocalSubtitle) {
+    setLocalBurnStatus('error', '本地文件选择仅可在桌面应用中使用');
+    return;
+  }
+  const file = await window.electronAPI.selectLocalSubtitle();
+  if (file) {
+    document.getElementById('localSubtitlePath').value = file;
+    setLocalBurnStatus('', '');
+  }
+}
+
+async function startLocalBurn() {
+  const videoPath = document.getElementById('localVideoPath').value;
+  const subtitlePath = document.getElementById('localSubtitlePath').value;
+  const button = document.getElementById('localBurnBtn');
+  if (!videoPath || !subtitlePath) {
+    setLocalBurnStatus('error', '请同时选择视频和字幕文件');
+    return;
+  }
+  button.disabled = true;
+  setLocalBurnStatus('', '正在创建烧录任务...');
+  try {
+    const response = await fetch('/api/local-burn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        video_path: videoPath,
+        subtitle_path: subtitlePath,
+        container: document.getElementById('localBurnContainer').value,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || 'Could not start local subtitle burn');
+    setLocalBurnStatus('ok', '任务已加入队列，可在任务中心查看进度');
+    await refreshTaskCenter();
+  } catch (error) {
+    setLocalBurnStatus('error', friendlyError(error.message));
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function setSettingsMsg(kind, message, autoClear = false) {
   const msg = document.getElementById('settingsMsg');
   clearTimeout(settingsMessageTimer);
@@ -504,6 +565,14 @@ function friendlyError(err) {
   if (err.includes('Bundled subtitle font is missing')) return '应用缺少硬字幕字体文件';
   if (err.includes('Could not convert subtitle for burning')) return '无法转换所选字幕';
   if (err.includes('Could not burn subtitle into video')) return '无法将字幕烧录到视频画面';
+  if (err.includes('Select a local video file')) return '请选择本地视频文件';
+  if (err.includes('Select a local subtitle file')) return '请选择本地字幕文件';
+  if (err.includes('Local video file does not exist')) return '所选本地视频不存在或无法访问';
+  if (err.includes('Local subtitle file does not exist')) return '所选字幕文件不存在或无法访问';
+  if (err.includes('Unsupported local video format')) return '不支持所选视频格式';
+  if (err.includes('Unsupported local subtitle format')) return '字幕仅支持 SRT、ASS 或 VTT';
+  if (err.includes('Invalid local burn container')) return '本地烧录输出格式无效';
+  if (err.includes('Could not start local subtitle burn')) return '无法创建本地字幕烧录任务';
   if (err.includes('Job not found')) return '未找到下载任务';
   if (err.includes('File not ready')) return '文件尚未准备完成';
   if (err.includes('Access denied')) return '没有权限访问该文件';
@@ -1015,6 +1084,15 @@ const taskStatusLabels = {
   queued: '等待中', starting: '正在启动', downloading: '下载中', paused: '已暂停',
   interrupted: '恢复中', done: '已完成', error: '失败', cancelled: '已取消', missing: '文件已移动'
 };
+
+function taskStatusLabel(task) {
+  if (task.kind === 'local_burn') {
+    if (task.status === 'starting') return '正在准备本地文件';
+    if (task.status === 'downloading') return '正在烧录字幕';
+    if (task.status === 'paused') return '烧录已暂停';
+  }
+  return taskStatusLabels[task.status] || task.status;
+}
 let taskCenterInitialized = false;
 
 async function taskAction(id, action, extra = {}) {
@@ -1073,7 +1151,7 @@ async function refreshTaskCenter() {
     document.getElementById('taskList').innerHTML = tasks.map(task => {
       const percent = Number.isFinite(task.progress?.percent) ? ` · ${task.progress.percent.toFixed(1)}%` : '';
       const detail = task.error ? ` · ${esc(friendlyError(task.error))}` : '';
-      return `<div class="task-row"><div><div class="task-title">${esc(task.title || task.filename || '未命名任务')}</div><div class="task-meta">${taskStatusLabels[task.status] || task.status} · ${(task.format || 'video').toUpperCase()}${percent}${detail}</div></div><div class="task-actions">${taskButtons(task)}</div></div>`;
+      return `<div class="task-row"><div><div class="task-title">${esc(task.title || task.filename || '未命名任务')}</div><div class="task-meta">${taskStatusLabel(task)} · ${(task.format || 'video').toUpperCase()}${percent}${detail}</div></div><div class="task-actions">${taskButtons(task)}</div></div>`;
     }).join('');
     if (taskCenterInitialized) {
       tasks.filter(task => task.status === 'done' && !notifiedJobs.has(task.id)).forEach(task => {
@@ -1102,6 +1180,9 @@ document.addEventListener('click', event => {
     case 'browse-path': void browsePath(); break;
     case 'detect-proxy': void autoDetectProxy(); break;
     case 'browse-cookie-file': void browseCookieFile(); break;
+    case 'browse-local-video': void browseLocalVideo(); break;
+    case 'browse-local-subtitle': void browseLocalSubtitle(); break;
+    case 'start-local-burn': void startLocalBurn(); break;
     case 'test-cookies': void testCookies(); break;
     case 'check-app-update': void checkAppUpdate(); break;
     case 'check-ytdlp': void checkYtdlp(); break;

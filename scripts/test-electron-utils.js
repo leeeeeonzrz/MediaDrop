@@ -82,6 +82,12 @@ assert(buildWorkflow.includes("9f4b7be573fc9a7ade892224b756f7ae733b49c4eba46c2ea
 assert(buildWorkflow.includes("11b5555e29b71908d88959f34d79c1e356f7ff6ee349c066f899146245d51bc7"), "Windows ARM64 FFmpeg checksum is missing");
 assert(buildWorkflow.includes("Roboto-OFL.txt"), "Release builds no longer verify the Roboto license");
 assert(buildWorkflow.includes("NotoSansCJK-OFL.txt"), "Release builds no longer verify the Noto license");
+const mainSource = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+const preloadSource = fs.readFileSync(path.join(__dirname, "..", "preload.js"), "utf8");
+assert(mainSource.includes('ipcMain.handle("select-local-video"'), "Local video picker IPC is missing");
+assert(mainSource.includes('extensions: ["srt", "ass", "vtt"]'), "SubForge subtitle picker formats changed");
+assert(preloadSource.includes("selectLocalVideo"), "Local video picker is not exposed to the renderer");
+assert(preloadSource.includes("selectLocalSubtitle"), "Local subtitle picker is not exposed to the renderer");
 
 const macFfmpegBuild = fs.readFileSync(path.join(__dirname, "build-ffmpeg-macos.sh"), "utf8");
 assert(macFfmpegBuild.includes("FFMPEG_VERSION=\"8.1.2\""), "macOS FFmpeg version is not pinned");
