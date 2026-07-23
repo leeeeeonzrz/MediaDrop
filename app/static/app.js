@@ -479,12 +479,20 @@ function embedSubtitleSummary(codes, tracks = []) {
 function buildDownloadRequest(card, format = card.format || 'video') {
   const options = card.options || {};
   let requestOptions = {};
-  if (format === 'video') {
+  const subtitleMode = options.subtitle_mode || (options.subtitles ? 'embed' : 'none');
+  const subtitleOnly = format === 'video' && subtitleMode === 'download';
+  const outputFormat = subtitleOnly ? 'subtitle' : format;
+  if (subtitleOnly) {
+    requestOptions = {
+      subtitle_language: options.subtitle_language || '',
+      subtitle_format: options.subtitle_format || 'srt',
+    };
+  } else if (format === 'video') {
     const selectedFormat = (card.formats || []).find(item => item.id === card.selectedFormatId);
     requestOptions = {
       container: options.container || 'mp4',
-      subtitle_mode: options.subtitle_mode || (options.subtitles ? 'embed' : 'none'),
-      subtitles: (options.subtitle_mode || (options.subtitles ? 'embed' : 'none')) === 'embed',
+      subtitle_mode: subtitleMode,
+      subtitles: subtitleMode === 'embed',
       subtitle_languages: options.subtitle_languages ?? 'zh.*,en.*',
       burn_subtitle_language: options.burn_subtitle_language || '',
       source_is_hdr: Boolean(selectedFormat?.hdr),
@@ -500,10 +508,10 @@ function buildDownloadRequest(card, format = card.format || 'video') {
     };
   }
   return {
-    format,
-    formatId: format === 'video' ? (card.selectedFormatId || null) : null,
-    videoRangeMode: format === 'video' ? (card.videoRangeMode || 'auto') : null,
-    preset: format === 'video' ? (card.preset || 'recommended') : 'custom',
+    format: outputFormat,
+    formatId: format === 'video' && !subtitleOnly ? (card.selectedFormatId || null) : null,
+    videoRangeMode: format === 'video' && !subtitleOnly ? (card.videoRangeMode || 'auto') : null,
+    preset: format === 'video' && !subtitleOnly ? (card.preset || 'recommended') : 'custom',
     options: requestOptions,
   };
 }
@@ -668,6 +676,8 @@ async function go() {
             subtitle_mode: 'none',
             subtitle_languages: 'zh.*,en.*',
             burn_subtitle_language: '',
+            subtitle_language: '',
+            subtitle_format: 'srt',
           },
           completedDownloads: {},
         };
@@ -733,8 +743,10 @@ function renderCard(idx) {
   // Ready / downloading / done / error states
   el.className = 'card';
   const cardFmt = c.format || 'video';
+  const isVideo = cardFmt === 'video';
   const isAudio = cardFmt === 'audio';
   const isImage = cardFmt === 'image';
+  const downloadsSubtitle = isVideo && (c.options?.subtitle_mode || 'none') === 'download';
 
   let thumbHtml;
   if (isAudio) {
@@ -772,7 +784,7 @@ function renderCard(idx) {
 
   // Quality chips (only for video)
   let qualityChips = '';
-  if (!isAudio && !isImage && c.formats && c.formats.length > 0) {
+  if (isVideo && c.formats && c.formats.length > 0) {
     const visibleFormats = rangeMode === 'hdr'
       ? c.formats.filter(f => f.hdr)
       : rangeMode === 'sdr'
@@ -801,13 +813,17 @@ function renderCard(idx) {
     const label = `${track.name || track.code} (${track.code})${track.automatic ? ' · 自动字幕' : ''}`;
     return `<option value="${attr(track.code)}"${options.burn_subtitle_language === track.code ? ' selected' : ''}>${esc(label)}</option>`;
   }).join('');
-  const advancedOptions = `<details class="advanced-options">
+  const downloadSubtitleTrackOptions = subtitleTracks.map(track => {
+    const label = `${track.name || track.code} (${track.code})${track.automatic ? ' · 自动字幕' : ''}`;
+    return `<option value="${attr(track.code)}"${options.subtitle_language === track.code ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+  const advancedOptions = `<details class="advanced-options"${downloadsSubtitle ? ' open' : ''}>
     <summary>高级选项</summary>
     <div class="advanced-grid">
-      ${!isAudio && !isImage ? `<label class="select-field"><span>封装</span><select data-change-action="set-option" data-index="${idx}" data-option="container"><option value="mp4"${options.container === 'mp4' ? ' selected' : ''}>MP4</option><option value="mkv"${options.container === 'mkv' ? ' selected' : ''}>MKV</option><option value="webm"${options.container === 'webm' ? ' selected' : ''}>WebM</option></select></label>` : ''}
+      ${isVideo && !downloadsSubtitle ? `<label class="select-field"><span>封装</span><select data-change-action="set-option" data-index="${idx}" data-option="container"><option value="mp4"${options.container === 'mp4' ? ' selected' : ''}>MP4</option><option value="mkv"${options.container === 'mkv' ? ' selected' : ''}>MKV</option><option value="webm"${options.container === 'webm' ? ' selected' : ''}>WebM</option></select></label>` : ''}
       ${isAudio ? `<label class="select-field"><span>音质</span><select data-change-action="set-option" data-index="${idx}" data-option="audio_quality"><option value="128"${options.audio_quality === '128' ? ' selected' : ''}>128 kbps</option><option value="192"${(options.audio_quality || '192') === '192' ? ' selected' : ''}>192 kbps</option><option value="256"${options.audio_quality === '256' ? ' selected' : ''}>256 kbps</option><option value="320"${options.audio_quality === '320' ? ' selected' : ''}>320 kbps</option></select></label>` : ''}
-      ${!isImage ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="metadata"${options.metadata ? ' checked' : ''}>写入元数据</label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="embed_thumbnail"${options.embed_thumbnail ? ' checked' : ''}>嵌入封面</label>` : ''}
-      ${!isAudio && !isImage ? `<label class="select-field"><span>字幕处理</span><select data-change-action="set-subtitle-mode" data-index="${idx}"><option value="none"${subtitleMode === 'none' ? ' selected' : ''}>不处理字幕</option><option value="embed"${subtitleMode === 'embed' ? ' selected' : ''}>嵌入为可切换字幕</option><option value="burn"${subtitleMode === 'burn' ? ' selected' : ''}>烧录到视频画面</option></select></label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label>${subtitleMode === 'embed' ? `<div class="multi-select-field"><span>字幕语言</span><details class="subtitle-multi${subtitleTracks.length ? '' : ' disabled'}"><summary id="embed-subtitle-summary-${idx}">${esc(embedSubtitleSummary(embedSelectedCodes, subtitleTracks))}</summary>${subtitleTracks.length ? `<div class="subtitle-multi-menu">${embedSubtitleOptions}</div>` : ''}</details></div>` : ''}${subtitleMode === 'burn' ? `<label class="select-field"><span>烧录语言</span><select data-change-action="set-option" data-index="${idx}" data-option="burn_subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${subtitleTrackOptions}</select><span class="field-help">硬字幕会重新编码视频，并永久显示在画面中；当前仅支持 SDR。</span></label>` : ''}` : ''}
+      ${!isImage && !downloadsSubtitle ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="metadata"${options.metadata ? ' checked' : ''}>写入元数据</label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="embed_thumbnail"${options.embed_thumbnail ? ' checked' : ''}>嵌入封面</label>` : ''}
+      ${isVideo ? `<label class="select-field"><span>字幕处理</span><select data-change-action="set-subtitle-mode" data-index="${idx}"><option value="none"${subtitleMode === 'none' ? ' selected' : ''}>不处理字幕</option><option value="embed"${subtitleMode === 'embed' ? ' selected' : ''}>嵌入为可切换字幕</option><option value="burn"${subtitleMode === 'burn' ? ' selected' : ''}>烧录到视频画面</option><option value="download"${subtitleMode === 'download' ? ' selected' : ''}>仅下载字幕文件</option></select></label>${!downloadsSubtitle ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label>` : ''}${subtitleMode === 'embed' ? `<div class="multi-select-field"><span>字幕语言</span><details class="subtitle-multi${subtitleTracks.length ? '' : ' disabled'}"><summary id="embed-subtitle-summary-${idx}">${esc(embedSubtitleSummary(embedSelectedCodes, subtitleTracks))}</summary>${subtitleTracks.length ? `<div class="subtitle-multi-menu">${embedSubtitleOptions}</div>` : ''}</details></div>` : ''}${subtitleMode === 'burn' ? `<label class="select-field"><span>烧录语言</span><select data-change-action="set-option" data-index="${idx}" data-option="burn_subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${subtitleTrackOptions}</select><span class="field-help">硬字幕会重新编码视频，并永久显示在画面中；当前仅支持 SDR。</span></label>` : ''}${subtitleMode === 'download' ? `<label class="select-field"><span>字幕语言</span><select data-change-action="set-option" data-index="${idx}" data-option="subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${downloadSubtitleTrackOptions}</select></label><label class="select-field"><span>字幕格式</span><select data-change-action="set-option" data-index="${idx}" data-option="subtitle_format"><option value="srt"${(options.subtitle_format || 'srt') === 'srt' ? ' selected' : ''}>SRT</option><option value="vtt"${options.subtitle_format === 'vtt' ? ' selected' : ''}>VTT</option><option value="ass"${options.subtitle_format === 'ass' ? ' selected' : ''}>ASS</option></select><span class="field-help">仅下载选定字幕，不会下载视频或音频。</span></label>` : ''}` : ''}
     </div>
   </details>`;
 
@@ -816,9 +832,9 @@ function renderCard(idx) {
 
   if (c.status === 'ready') {
     actionHtml = `${fmtPills}
-      ${!isAudio && !isImage ? rangePills : ''}
-      ${!isAudio && !isImage ? presetPills : ''}
-      ${!isAudio && !isImage && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${isVideo && !downloadsSubtitle ? rangePills : ''}
+      ${isVideo && !downloadsSubtitle ? presetPills : ''}
+      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
       ${advancedOptions}
       <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">下载</button>`;
   } else if (c.status === 'queued') {
@@ -860,27 +876,27 @@ function renderCard(idx) {
       : '';
     actionHtml = `${completionStatus}
       ${fmtPills}
-      ${!isAudio && !isImage ? rangePills : ''}
-      ${!isAudio && !isImage ? presetPills : ''}
-      ${!isAudio && !isImage && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${isVideo && !downloadsSubtitle ? rangePills : ''}
+      ${isVideo && !downloadsSubtitle ? presetPills : ''}
+      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
       ${advancedOptions}
       <div class="done-btns">
         <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">${completed ? '重新下载' : '下载'}</button>
       </div>`;
   } else if (c.status === 'error') {
     actionHtml = `${fmtPills}
-      ${!isAudio && !isImage ? rangePills : ''}
-      ${!isAudio && !isImage ? presetPills : ''}
-      ${!isAudio && !isImage && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${isVideo && !downloadsSubtitle ? rangePills : ''}
+      ${isVideo && !downloadsSubtitle ? presetPills : ''}
+      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
       ${advancedOptions}
       <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">重试</button>
       <span class="card-status error">${esc(friendlyError(c.error || 'Download failed'))}</span>`;
   } else if (c.status === 'cancelled') {
     actionHtml = `<span class="card-status error">已取消</span>
       ${fmtPills}
-      ${!isAudio && !isImage ? rangePills : ''}
-      ${!isAudio && !isImage ? presetPills : ''}
-      ${!isAudio && !isImage && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${isVideo && !downloadsSubtitle ? rangePills : ''}
+      ${isVideo && !downloadsSubtitle ? presetPills : ''}
+      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
       ${advancedOptions}
       <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">下载</button>`;
   }
@@ -1018,6 +1034,13 @@ async function dlCard(idx) {
       !c.activeRequest.options?.burn_subtitle_language) {
     c.status = 'error';
     c.error = 'Select one subtitle language to burn';
+    renderCard(idx);
+    return;
+  }
+  if (c.activeRequest.format === 'subtitle' &&
+      !c.activeRequest.options?.subtitle_language) {
+    c.status = 'error';
+    c.error = 'Select one subtitle language to download';
     renderCard(idx);
     return;
   }
