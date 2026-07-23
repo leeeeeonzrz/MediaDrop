@@ -21,6 +21,9 @@ if (!source.includes("selectLocalVideo") || !source.includes("selectLocalSubtitl
 if (!source.includes("toggleEmbedSubtitleLanguage") || !source.includes("subtitle-multi-menu")) {
   throw new Error("Embedded subtitle multi-select menu is missing");
 }
+if (!source.includes('value="download"') || !source.includes("subtitle_format")) {
+  throw new Error("Standalone subtitle download controls are missing");
+}
 const start = source.indexOf("function selectedEmbedSubtitleCodes");
 const end = source.indexOf("function parseUrls", start);
 if (start < 0 || end < 0) throw new Error("Download state helpers were not found");
@@ -60,6 +63,19 @@ card.completedDownloads[helpers.downloadRequestKey(videoRequest)] = { filename: 
 assert(helpers.completedDownloadFor(card)?.filename === "video.mp4", "Completed MP4 was not recognized");
 assert(helpers.completedDownloadFor(card, "image") === null, "JPG incorrectly inherited MP4 completion");
 assert(helpers.completedDownloadFor(card, "audio") === null, "MP3 incorrectly inherited MP4 completion");
+assert(helpers.completedDownloadFor(card, "subtitle") === null, "Subtitle incorrectly inherited MP4 completion");
+
+card.format = "video";
+card.options = { subtitle_mode: "download", subtitle_language: "zh-Hans", subtitle_format: "ass" };
+const subtitleRequest = helpers.buildDownloadRequest(card);
+assert(subtitleRequest.format === "subtitle", "Subtitle request used the wrong output type");
+assert(subtitleRequest.formatId === null, "Subtitle request inherited a video stream ID");
+assert(subtitleRequest.options.subtitle_language === "zh-Hans", "Subtitle language was not sent");
+assert(subtitleRequest.options.subtitle_format === "ass", "Subtitle output format was not sent");
+card.completedDownloads[helpers.downloadRequestKey(subtitleRequest)] = { filename: "video [zh-Hans].ass" };
+assert(helpers.completedDownloadFor(card)?.filename.endsWith(".ass"), "Completed subtitle was not recognized");
+card.format = "video";
+card.options = { subtitle_mode: "embed", subtitle_languages: "zh-Hans,en" };
 
 const imageRequest = helpers.buildDownloadRequest(card, "image");
 card.completedDownloads[helpers.downloadRequestKey(imageRequest)] = { filename: "cover.jpg" };

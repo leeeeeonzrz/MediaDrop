@@ -725,6 +725,62 @@ class CacheLifecycleTests(unittest.TestCase):
         self.assertEqual(os.listdir(server.get_cache_root()), [])
         self.assertNotIn("success", server.active_downloads)
 
+    def test_subtitle_download_skips_media_converts_and_publishes_selected_format(self):
+        captured = []
+
+        class SuccessfulProcess:
+            stdout = iter([])
+            returncode = 0
+
+            def wait(self, timeout=None): return 0
+            def poll(self): return 0
+
+        def create_subtitle_output(command, **kwargs):
+            captured.extend(command)
+            template = command[command.index("-o") + 1]
+            pathlib.Path(template.replace("%(ext)s", "zh-Hans.srt")).write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n字幕\n", encoding="utf-8"
+            )
+            return SuccessfulProcess()
+
+        server.jobs["subtitle"] = {
+            "status": "starting",
+            "progress": server.empty_progress(),
+        }
+        server.active_downloads.add("subtitle")
+        patches = [
+            mock.patch.object(server, "get_download_dir", return_value=self.download_dir),
+            mock.patch.object(server, "get_ytdlp_path", return_value="yt-dlp"),
+            mock.patch.object(server, "get_proxy_url", return_value=""),
+            mock.patch.object(server, "get_cookie_args", return_value=[]),
+            mock.patch.object(server, "get_ffmpeg_dir", return_value=None),
+            mock.patch.object(server, "get_ytdlp_env", return_value={}),
+            mock.patch.object(server.subprocess, "Popen", side_effect=create_subtitle_output),
+        ]
+        for patcher in patches: patcher.start()
+        try:
+            server.run_download(
+                "subtitle", "https://example.com/video", "subtitle", None,
+                "Example", "auto", "custom", {
+                    "subtitle_language": "zh-Hans",
+                    "subtitle_format": "srt",
+                },
+            )
+        finally:
+            for patcher in reversed(patches): patcher.stop()
+
+        self.assertIn("--skip-download", captured)
+        self.assertIn("--write-subs", captured)
+        self.assertIn("--write-auto-subs", captured)
+        self.assertEqual(captured[captured.index("--sub-langs") + 1], "zh-Hans")
+        self.assertEqual(captured[captured.index("--convert-subs") + 1], "srt")
+        self.assertNotIn("-f", captured)
+        job = server.jobs["subtitle"]
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["filename"], "Example [zh-Hans].srt")
+        self.assertIn("字幕", pathlib.Path(job["file"]).read_text(encoding="utf-8"))
+        self.assertEqual(os.listdir(server.get_cache_root()), [])
+
     def test_local_burn_preserves_source_and_uses_shared_pipeline(self):
         video = pathlib.Path(self.temp_dir.name) / "本地视频.mov"
         subtitle = pathlib.Path(self.temp_dir.name) / "SubForge字幕.ass"
@@ -1057,6 +1113,31 @@ class PersistenceAndApiTests(unittest.TestCase):
         process_queue.assert_called_once()
         job = server.jobs[accepted.get_json()["job_id"]]
         self.assertEqual(job["options"]["subtitle_languages"], "zh-Hans,en")
+
+    def test_subtitle_download_api_requires_language_and_normalizes_format(self):
+        client = server.app.test_client()
+        request = {
+            "url": "https://example.com/video",
+            "format": "subtitle",
+            "options": {"subtitle_language": "", "subtitle_format": "txt"},
+        }
+
+        rejected = client.post("/api/download", json=request)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(
+            rejected.get_json()["error"],
+            "Select one subtitle language to download",
+        )
+
+        request["options"]["subtitle_language"] = "en"
+        with mock.patch.object(server, "process_download_queue") as process_queue:
+            accepted = client.post("/api/download", json=request)
+        self.assertEqual(accepted.status_code, 200)
+        process_queue.assert_called_once()
+        job = server.jobs[accepted.get_json()["job_id"]]
+        self.assertEqual(job["format"], "subtitle")
+        self.assertEqual(job["options"]["subtitle_language"], "en")
+        self.assertEqual(job["options"]["subtitle_format"], "srt")
 
     def test_local_burn_api_validates_and_queues_subforge_files(self):
         video = pathlib.Path(self.temp_dir.name) / "input.mkv"

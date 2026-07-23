@@ -6,7 +6,7 @@
 ![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 
-一个简洁优雅的视频 / 音频下载器，支持 YouTube、TikTok、Instagram、Twitter/X 等 1000+ 网站，一键下载为 MP4、MP3 或 JPG。
+一个简洁优雅的视频 / 音频 / 字幕下载器，支持 YouTube、TikTok、Instagram、Twitter/X 等 1000+ 网站，一键下载为 MP4、MP3、JPG、SRT、VTT 或 ASS。
 
 > 本项目基于 [reclip](https://github.com/averygan/reclip) 开发，在此致谢。
 
@@ -36,7 +36,7 @@
 ### 📥 核心功能
 
 - **🔗 万能下载**：支持 1000+ 网站（基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp)）
-- **🎬 多格式输出**：MP4 视频 / MP3 音频 / JPG 缩略图，自由选择
+- **🎬 多格式输出**：MP4 视频 / MP3 音频 / JPG 缩略图，以及 SRT / VTT / ASS 字幕，自由选择
 - **📊 画质选择**：支持多种分辨率，最高 2160p (4K)
 - **🌈 HDR 识别**：自动区分 SDR、HDR10、HDR10+、HLG 与 Dolby Vision，并支持严格筛选
 - **🎚️ 下载预设**：推荐、最高画质、节省空间、兼容模式，也可精确选择视频流
@@ -44,6 +44,7 @@
 - **⏸️ 下载控制**：实时进度追踪，支持暂停 / 恢复 / 取消
 - **🗂️ 任务中心**：统一管理队列与历史；应用重启后自动恢复未完成任务
 - **🧩 高级选项**：支持 MP4 / MKV / WebM、MP3 音质、章节、封面和元数据；内嵌字幕可从视频提供的语种菜单中多选
+- **📝 独立字幕下载**：在 MP4 的高级字幕处理中选择一种手动或自动字幕，可只下载 SRT、VTT 或 ASS 文件而不下载视频和音频
 - **🔤 硬字幕**：可选择一种手动或自动字幕直接烧录进 SDR 视频画面，字号随分辨率和横竖屏方向缩放并适度增大，竖屏继续使用更大的画面占比，底部留白为原来的两倍，配合无描边白字和 70% 不透明黑底，并自动优先使用可用的 GPU 编码器；NVENC 会参考源视频码率动态约束输出体积
 - **📁 本地字幕烧录**：桌面应用可直接选择本地视频与 [SubForge](https://github.com/henry1786580051-lang/SubForge) 可导出的 SRT / ASS / VTT 字幕；原文件保持不变，并复用相同的字幕样式、SDR 限制、GPU 探测、CPU 回退和任务中心流程
 - **⏱️ 稳定时间估算**：平滑网络波动，区分下载、合并与转码阶段
@@ -192,7 +193,7 @@ docker run -p 8899:8899 mediadrop
 ## 📖 使用说明
 
 1. **📋 粘贴链接**：将一个或多个视频 URL 粘贴到输入框中
-2. **🎯 选择格式**：选择 **MP4**（视频）、**MP3**（音频）或 **JPG**（缩略图）
+2. **🎯 选择格式**：选择 **MP4**（视频）、**MP3**（音频）或 **JPG**（缩略图）；如只需字幕，在 MP4 的高级选项中将“字幕处理”设为“仅下载字幕文件”并选择语言与 SRT / VTT / ASS 格式
 3. **🔍 获取信息**：点击 **Fetch** 按钮，加载视频信息和缩略图
 4. **📊 选择画质**：如果可用，选择所需的分辨率
 5. **⬇️ 开始下载**：点击单个视频的 **Download** 按钮，或 **Download All** 批量下载
