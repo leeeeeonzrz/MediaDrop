@@ -1565,6 +1565,17 @@ def run_download(
     if format_choice == "image":
         ext = ".jpg"
         cmd += ["--write-thumbnail", "--convert-thumbnails", "jpg", "--skip-download"]
+    elif format_choice == "subtitle":
+        subtitle_format = options.get("subtitle_format", "srt")
+        subtitle_language = options.get("subtitle_language", "")
+        ext = f".{subtitle_format}"
+        cmd += [
+            "--skip-download",
+            "--write-subs", "--write-auto-subs",
+            "--sub-langs", subtitle_language,
+            "--sub-format", f"{subtitle_format}/best",
+            "--convert-subs", subtitle_format,
+        ]
     elif format_choice == "audio":
         ext = ".mp3"
         audio_quality = str(options.get("audio_quality", "192"))
@@ -1599,7 +1610,7 @@ def run_download(
     subtitle_mode = options.get("subtitle_mode")
     if not subtitle_mode:
         subtitle_mode = "embed" if options.get("subtitles") else "none"
-    if format_choice != "image":
+    if format_choice not in ("image", "subtitle"):
         if subtitle_mode == "embed" and format_choice == "video":
             languages = options.get("subtitle_languages", "zh.*,en.*")
             cmd += [
@@ -1694,7 +1705,10 @@ def run_download(
         chosen = next((f for f in files if f.lower().endswith(ext)), None)
         if not chosen:
             job["status"] = "error"
-            job["error"] = f"Download completed without the expected {ext} file"
+            if format_choice == "subtitle":
+                job["error"] = "The selected subtitle language was not downloaded"
+            else:
+                job["error"] = f"Download completed without the expected {ext} file"
             return
 
         if subtitle_mode == "burn" and format_choice == "video":
@@ -1712,8 +1726,11 @@ def run_download(
 
         # Publish only the fully completed media file. Partials and intermediate
         # streams remain isolated in the task cache and are removed in finally.
+        output_title = title
+        if format_choice == "subtitle":
+            output_title = f"{title} [{options.get('subtitle_language', '')}]"
         chosen, friendly_name = finalize_cached_file(
-            chosen, download_dir, title, ext, job_id
+            chosen, download_dir, output_title, ext, job_id
         )
 
         job["status"] = "done"
@@ -1796,11 +1813,12 @@ def is_better_format(candidate, existing):
     return (candidate.get("tbr") or 0) > (existing.get("tbr") or 0)
 
 
-VALID_FORMAT_CHOICES = {"video", "audio", "image"}
+VALID_FORMAT_CHOICES = {"video", "audio", "image", "subtitle"}
 VALID_PRESETS = {"recommended", "highest", "smallest", "compatible", "custom"}
 VALID_CONTAINERS = {"mp4", "mkv", "webm"}
 VALID_AUDIO_QUALITIES = {"128", "192", "256", "320"}
-VALID_SUBTITLE_MODES = {"none", "embed", "burn"}
+VALID_SUBTITLE_MODES = {"none", "embed", "burn", "download"}
+VALID_SUBTITLE_FORMATS = {"srt", "vtt", "ass"}
 
 
 def normalize_download_options(value):
@@ -1819,6 +1837,8 @@ def normalize_download_options(value):
         # Backward compatibility for jobs created before subtitle_mode existed.
         subtitle_mode = "embed" if value.get("subtitles") else "none"
     burn_language = str(value.get("burn_subtitle_language", "")).strip()[:40]
+    subtitle_language = str(value.get("subtitle_language", "")).strip()[:40]
+    subtitle_format = str(value.get("subtitle_format", "srt")).strip().lower()
     return {
         "container": container if container in VALID_CONTAINERS else "mp4",
         "audio_quality": audio_quality if audio_quality in VALID_AUDIO_QUALITIES else "192",
@@ -1826,6 +1846,10 @@ def normalize_download_options(value):
         "subtitles": subtitle_mode == "embed",
         "subtitle_languages": languages,
         "burn_subtitle_language": burn_language,
+        "subtitle_language": subtitle_language,
+        "subtitle_format": (
+            subtitle_format if subtitle_format in VALID_SUBTITLE_FORMATS else "srt"
+        ),
         "source_is_hdr": bool(value.get("source_is_hdr")),
         "metadata": bool(value.get("metadata")),
         "chapters": bool(value.get("chapters")),
@@ -2582,6 +2606,8 @@ def start_download():
     if (options["subtitle_mode"] == "embed" and format_choice == "video"
             and not options["subtitle_languages"]):
         return jsonify({"error": "Select at least one subtitle language to embed"}), 400
+    if format_choice == "subtitle" and not options["subtitle_language"]:
+        return jsonify({"error": "Select one subtitle language to download"}), 400
     if options["subtitle_mode"] == "burn":
         if format_choice != "video":
             return jsonify({"error": "Burned subtitles are only available for video downloads"}), 400
