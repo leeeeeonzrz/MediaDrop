@@ -200,6 +200,19 @@ class SubtitleBurnTests(unittest.TestCase):
 
         self.assertEqual(embedded["subtitle_mode"], "embed")
         self.assertTrue(embedded["subtitles"])
+        self.assertEqual(
+            server.normalize_download_options({
+                "subtitle_mode": "embed",
+                "subtitle_languages": ["zh-Hans", "en"],
+            })["subtitle_languages"],
+            "zh-Hans,en",
+        )
+        self.assertEqual(
+            server.normalize_download_options({
+                "subtitle_mode": "embed", "subtitle_languages": ""
+            })["subtitle_languages"],
+            "",
+        )
         self.assertEqual(plain["subtitle_mode"], "none")
 
     def test_subtitle_tracks_keep_manual_and_unique_automatic_languages(self):
@@ -218,14 +231,16 @@ class SubtitleBurnTests(unittest.TestCase):
         self.assertTrue(tracks[1]["automatic"])
 
     def test_dynamic_style_scales_and_compensates_for_portrait_video(self):
-        self.assertEqual(server.subtitle_style_for_resolution(1920, 1080)["font_size"], 54)
-        self.assertEqual(server.subtitle_style_for_resolution(1280, 720)["font_size"], 36)
-        self.assertEqual(server.subtitle_style_for_resolution(3840, 2160)["font_size"], 104)
-        self.assertEqual(server.subtitle_style_for_resolution(1080, 1920)["font_size"], 54)
-        self.assertEqual(server.subtitle_style_for_resolution(720, 1280)["font_size"], 36)
+        self.assertEqual(server.subtitle_style_for_resolution(1920, 1080)["font_size"], 59)
+        self.assertEqual(server.subtitle_style_for_resolution(1280, 720)["font_size"], 40)
+        self.assertEqual(server.subtitle_style_for_resolution(3840, 2160)["font_size"], 114)
+        self.assertEqual(server.subtitle_style_for_resolution(1080, 1920)["font_size"], 59)
+        self.assertEqual(server.subtitle_style_for_resolution(720, 1280)["font_size"], 40)
+        self.assertEqual(server.subtitle_style_for_resolution(1920, 1080)["margin_v"], 108)
+        self.assertEqual(server.subtitle_style_for_resolution(1080, 1920)["margin_v"], 192)
         self.assertEqual(server.subtitle_style_for_resolution(1920, 1080)["outline"], 0)
         self.assertEqual(
-            server.subtitle_style_for_resolution(1920, 1080)["background_padding"], 6
+            server.subtitle_style_for_resolution(1920, 1080)["background_padding"], 7
         )
 
     def test_video_probe_ignores_attached_cover_when_reading_resolution(self):
@@ -278,10 +293,11 @@ class SubtitleBurnTests(unittest.TestCase):
 
         self.assertIn("PlayResX: 1920", result)
         self.assertIn("PlayResY: 1080", result)
-        self.assertIn("Style: Default,Roboto Medium,54,&H00FFFFFF", result)
+        self.assertIn("Style: Default,Roboto Medium,59,&H00FFFFFF", result)
         self.assertIn("&H00000000", result)
         self.assertIn("&H4D000000", result)
-        self.assertIn(",4,0,6,2,", result)
+        self.assertIn(",4,0,7,2,", result)
+        self.assertIn(",96,96,108,1", result)
         self.assertIn("Dialogue:", result)
 
     def test_nvenc_bitrate_is_limited_relative_to_source(self):
@@ -801,7 +817,7 @@ class CacheLifecycleTests(unittest.TestCase):
             server.run_download(
                 "hdr", "https://example.com/video", "video", None, "HDR Example",
                 "hdr", "highest", {"container": "mp4", "subtitles": True,
-                "subtitle_languages": "zh.*,en.*", "metadata": True, "chapters": True},
+                "subtitle_languages": "zh-Hans,en", "metadata": True, "chapters": True},
             )
         finally:
             for patcher in reversed(patches): patcher.stop()
@@ -810,6 +826,8 @@ class CacheLifecycleTests(unittest.TestCase):
         self.assertIn("[dynamic_range!=SDR]", selector)
         self.assertNotIn("/best", selector)
         self.assertIn("--embed-subs", captured)
+        self.assertIn("--write-auto-subs", captured)
+        self.assertEqual(captured[captured.index("--sub-langs") + 1], "zh-Hans,en")
         self.assertIn("--embed-metadata", captured)
         self.assertIn("--embed-chapters", captured)
 
@@ -1012,6 +1030,33 @@ class PersistenceAndApiTests(unittest.TestCase):
         job = server.jobs[accepted.get_json()["job_id"]]
         self.assertEqual(job["options"]["subtitle_mode"], "burn")
         self.assertEqual(job["options"]["burn_subtitle_language"], "zh-Hans")
+
+    def test_embed_subtitle_api_requires_a_selected_language(self):
+        client = server.app.test_client()
+        request = {
+            "url": "https://example.com/video",
+            "format": "video",
+            "video_range_mode": "auto",
+            "options": {
+                "subtitle_mode": "embed",
+                "subtitle_languages": [],
+            },
+        }
+
+        rejected = client.post("/api/download", json=request)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(
+            rejected.get_json()["error"],
+            "Select at least one subtitle language to embed",
+        )
+
+        request["options"]["subtitle_languages"] = ["zh-Hans", "en"]
+        with mock.patch.object(server, "process_download_queue") as process_queue:
+            accepted = client.post("/api/download", json=request)
+        self.assertEqual(accepted.status_code, 200)
+        process_queue.assert_called_once()
+        job = server.jobs[accepted.get_json()["job_id"]]
+        self.assertEqual(job["options"]["subtitle_languages"], "zh-Hans,en")
 
     def test_local_burn_api_validates_and_queues_subforge_files(self):
         video = pathlib.Path(self.temp_dir.name) / "input.mkv"

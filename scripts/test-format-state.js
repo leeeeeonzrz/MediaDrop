@@ -18,12 +18,15 @@ if (!source.includes("fetch('/api/local-burn'")) {
 if (!source.includes("selectLocalVideo") || !source.includes("selectLocalSubtitle")) {
   throw new Error("Local media pickers are not wired into the page");
 }
-const start = source.indexOf("function buildDownloadRequest");
+if (!source.includes("toggleEmbedSubtitleLanguage") || !source.includes("subtitle-multi-menu")) {
+  throw new Error("Embedded subtitle multi-select menu is missing");
+}
+const start = source.indexOf("function selectedEmbedSubtitleCodes");
 const end = source.indexOf("function parseUrls", start);
 if (start < 0 || end < 0) throw new Error("Download state helpers were not found");
 
 const helpers = new Function(
-  `${source.slice(start, end)}; return { buildDownloadRequest, downloadRequestKey, completedDownloadFor };`
+  `${source.slice(start, end)}; return { selectedEmbedSubtitleCodes, buildDownloadRequest, downloadRequestKey, completedDownloadFor };`
 )();
 
 function assert(condition, message) {
@@ -35,8 +38,23 @@ const card = {
   selectedFormatId: "337",
   videoRangeMode: "hdr",
   completedDownloads: {},
+  subtitleTracks: [
+    { code: "en", name: "English", automatic: false },
+    { code: "zh-Hans", name: "中文（简体）", automatic: true },
+    { code: "ja", name: "日本語", automatic: false },
+  ],
+  options: { subtitle_mode: "embed", subtitle_languages: "zh-Hans,en" },
 };
+assert(
+  helpers.selectedEmbedSubtitleCodes("zh.*,en.*", card.subtitleTracks).join(",") === "en,zh-Hans",
+  "Legacy subtitle language patterns were not mapped to menu choices"
+);
+assert(
+  helpers.selectedEmbedSubtitleCodes("zh-Hans,ja", card.subtitleTracks).join(",") === "zh-Hans,ja",
+  "Multiple exact subtitle choices were not preserved"
+);
 const videoRequest = helpers.buildDownloadRequest(card);
+assert(videoRequest.options.subtitle_languages === "zh-Hans,en", "Multiple embedded subtitle choices were not sent");
 card.completedDownloads[helpers.downloadRequestKey(videoRequest)] = { filename: "video.mp4" };
 
 assert(helpers.completedDownloadFor(card)?.filename === "video.mp4", "Completed MP4 was not recognized");
