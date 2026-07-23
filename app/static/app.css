@@ -410,10 +410,20 @@ textarea::placeholder { color: var(--muted); }
 .advanced-options summary { color: var(--muted); font-size: 0.68rem; cursor: pointer; }
 .advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin-top: 9px; }
 .advanced-grid label { color: var(--muted); font-size: 0.68rem; }
-.advanced-grid .select-field, .advanced-grid .text-field { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: center; gap: 7px; }
+.advanced-grid .select-field, .advanced-grid .text-field, .advanced-grid .multi-select-field { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: center; gap: 7px; }
 .advanced-grid .field-help { grid-column: 2; margin-top: 0; }
 .advanced-grid .check-field { display: flex; align-items: center; gap: 6px; min-height: 30px; }
 .advanced-grid select, .advanced-grid input[type="text"] { min-width: 0; width: 100%; height: 30px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--soft); color: var(--fg); padding: 0 7px; }
+.subtitle-multi { position: relative; min-width: 0; }
+.subtitle-multi > summary { box-sizing: border-box; display: flex; align-items: center; min-width: 0; width: 100%; height: 30px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--soft); color: var(--fg); padding: 0 24px 0 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; list-style: none; }
+.subtitle-multi > summary::-webkit-details-marker { display: none; }
+.subtitle-multi > summary::after { content: '▾'; position: absolute; right: 8px; color: var(--muted); }
+.subtitle-multi[open] > summary::after { transform: rotate(180deg); }
+.subtitle-multi.disabled > summary { pointer-events: none; opacity: 0.55; }
+.subtitle-multi-menu { position: absolute; z-index: 20; top: 34px; left: 0; right: 0; max-height: 210px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 7px; background: var(--card); padding: 5px; box-shadow: 0 8px 24px rgba(20, 22, 20, 0.14); }
+.subtitle-multi-menu .subtitle-choice { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 6px; border-radius: 5px; color: var(--fg); cursor: pointer; }
+.subtitle-multi-menu .subtitle-choice:hover { background: var(--soft); }
+.subtitle-multi-menu .subtitle-choice input { flex: 0 0 auto; }
 
 .task-center { margin-top: 30px; border-top: 1px solid var(--card-border); padding-top: 18px; }
 .task-center[hidden] { display: none; }
