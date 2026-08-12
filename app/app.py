@@ -235,6 +235,20 @@ def health():
 
 @app.after_request
 def apply_security_headers(response):
+    # Frozen Windows builds can inherit a registry MIME mapping that labels
+    # JavaScript as text/plain. Chromium refuses to execute that response when
+    # nosniff is enabled, leaving every data-action control inert. Pin the
+    # bundled static asset types at the HTTP boundary so packaged behavior does
+    # not depend on the host machine's MIME registry.
+    if request.path.startswith(f"{app.static_url_path}/"):
+        extension = os.path.splitext(request.path)[1].lower()
+        static_mime_types = {
+            ".js": "text/javascript",
+            ".css": "text/css",
+            ".svg": "image/svg+xml",
+        }
+        if extension in static_mime_types:
+            response.mimetype = static_mime_types[extension]
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
