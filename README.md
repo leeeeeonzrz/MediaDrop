@@ -3,14 +3,14 @@
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-3.0-000000?logo=flask&logoColor=white)
-![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white)
+![Electron](https://img.shields.io/badge/Electron-41-47848F?logo=electron&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 
 一个简洁优雅的视频 / 音频 / 字幕下载器，支持 YouTube、TikTok、Instagram、Twitter/X 等 1000+ 网站，一键下载为 MP4、MP3、JPG、SRT、VTT 或 ASS。
 
 > 本项目基于 [reclip](https://github.com/averygan/reclip) 开发，在此致谢。
 
-> **👉 [下载桌面应用](https://github.com/henry1786580051-lang/MediaDrop/releases/latest)**，macOS / Windows 一键安装，开箱即用。
+> **👉 [下载 Windows 长期维护版](https://github.com/leeeeeonzrz/MediaDrop/releases/latest)**。本分支在同步上游的基础上，长期保留 Windows 字幕与打包增强功能。
 
 <p align="center">
   <img src="app/assets/preview.png" alt="MediaDrop 界面预览" width="80%" />
@@ -73,7 +73,7 @@
 
 ### 方式一：下载桌面应用（推荐）
 
-前往 [Releases](https://github.com/henry1786580051-lang/MediaDrop/releases/latest) 页面下载安装包：
+前往 [Windows fork Releases](https://github.com/leeeeeonzrz/MediaDrop/releases/latest) 页面下载安装包：
 
 | 平台 | 架构 | 文件 |
 |------|------|------|
