@@ -1084,7 +1084,8 @@ class PersistenceAndApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
 
     def test_frontend_uses_local_assets_and_strict_security_policy(self):
-        response = server.app.test_client().get("/")
+        client = server.app.test_client()
+        response = client.get("/")
         html = response.get_data(as_text=True)
         policy = response.headers["Content-Security-Policy"]
 
@@ -1094,6 +1095,21 @@ class PersistenceAndApiTests(unittest.TestCase):
         self.assertNotIn('unsafe-inline', policy)
         self.assertIn("script-src 'self'", policy)
         self.assertIn("style-src 'self'", policy)
+
+        static_assets = {
+            "/static/app.js": "text/javascript",
+            "/static/app.css": "text/css",
+            "/static/favicon.svg": "image/svg+xml",
+        }
+        for path, expected_mimetype in static_assets.items():
+            with self.subTest(path=path):
+                asset = client.get(path)
+                try:
+                    self.assertEqual(asset.status_code, 200)
+                    self.assertEqual(asset.mimetype, expected_mimetype)
+                    self.assertEqual(asset.headers["X-Content-Type-Options"], "nosniff")
+                finally:
+                    asset.close()
 
     def test_config_validates_and_saves_concurrency(self):
         client = server.app.test_client()
