@@ -10,7 +10,7 @@ const {
   selectReleaseAsset,
   stopProcessTree,
 } = require("../electron-utils");
-const { detectExecutableArchitecture } = require("./verify-ffmpeg");
+const { detectExecutableArchitecture, hasListedCapability } = require("./verify-ffmpeg");
 const fs = require("fs");
 const path = require("path");
 
@@ -54,6 +54,9 @@ assert(selectReleaseAsset(assets, "win32", "x64")?.name === "MediaDrop.Setup.1.1
 assert(isTrustedMediaDropReleaseUrl("https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.1.0/file.exe"), "Official release URL was rejected");
 assert(!isTrustedMediaDropReleaseUrl("https://github.com/other/repo/releases/download/V1/file.exe"), "Foreign release URL was trusted");
 stopProcessTree(null);
+assert(hasListedCapability(" V..... libx264  H.264 encoder", "libx264"), "Exact FFmpeg encoder capability was not detected");
+assert(!hasListedCapability(" V..... libx264rgb  H.264 encoder", "libx264"), "Partial FFmpeg encoder name was accepted");
+assert(!hasListedCapability(" ... subtitles V->V", "ass"), "One subtitle filter incorrectly satisfied another filter check");
 
 const packageConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
 assert(packageConfig.engines.node === ">=22.12.0", "Node runtime requirement is not pinned");
@@ -94,8 +97,40 @@ assert(macFfmpegBuild.includes("FFMPEG_VERSION=\"8.1.2\""), "macOS FFmpeg versio
 assert(macFfmpegBuild.includes("https://codeload.github.com/FFmpeg/FFmpeg/"), "Official FFmpeg repository source is missing");
 assert(macFfmpegBuild.includes("9fd092511605bbebafe095ea6d38d9e40f34d12f7386e1258372df8be0576eb7"), "Official FFmpeg source checksum is missing");
 assert(macFfmpegBuild.includes("ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"), "LAME source checksum is missing");
-assert(macFfmpegBuild.includes("--enable-libmp3lame"), "macOS FFmpeg build does not enable MP3 encoding");
+for (const checksum of [
+  "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+  "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f",
+  "1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c",
+  "a54a5d8e9380a41fbb762ce367bcbf7704792dfca0d93f1bbca86c5a57902e0e",
+  "78f1179b838d025e9c26e8fef33f8092f65611444ffa1bfc0cfac6a33511a05a",
+  "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9",
+  "7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c",
+]) {
+  assert(macFfmpegBuild.includes(checksum), `Pinned macOS FFmpeg dependency checksum is missing: ${checksum}`);
+}
+for (const configureFlag of [
+  "--enable-libass",
+  "--enable-libmp3lame",
+  "--enable-libopus",
+  "--enable-libvpx",
+  "--enable-libx264",
+  "--enable-pthreads",
+  "--enable-videotoolbox",
+  "--pkg-config-flags=--static",
+  "--extra-libs=-lc++",
+]) {
+  assert(macFfmpegBuild.includes(configureFlag), `macOS FFmpeg capability is not enabled: ${configureFlag}`);
+}
+assert(macFfmpegBuild.includes('BINARY_CACHE_SCHEMA="hard-subtitles-v2"'), "macOS FFmpeg cache schema was not bumped");
+assert(macFfmpegBuild.includes("validate_smoke_transcodes"), "macOS FFmpeg build lacks hard-subtitle smoke transcodes");
+assert(macFfmpegBuild.includes("LC_RPATH"), "macOS FFmpeg build does not reject third-party runtime search paths");
+assert(buildWorkflow.includes("for ENCODER in ass aac libmp3lame libopus libx264 libvpx-vp9"), "Release builds do not independently verify every subtitle encoder");
 assert(buildWorkflow.includes("verify-ffmpeg.js bundled-bin/ffmpeg.exe"), "Windows FFmpeg architecture verification is missing");
+
+const ffmpegVerifier = fs.readFileSync(path.join(__dirname, "verify-ffmpeg.js"), "utf8");
+for (const capability of ["ass", "aac", "libmp3lame", "libopus", "libx264", "libvpx-vp9", "h264_videotoolbox", "subtitles"]) {
+  assert(ffmpegVerifier.includes(`\"${capability}\"`), `Bundled FFmpeg verifier is missing ${capability}`);
+}
 
 const runtimeRequirements = fs.readFileSync(path.join(__dirname, "..", "app", "requirements.txt"), "utf8");
 const buildRequirements = fs.readFileSync(path.join(__dirname, "..", "app", "requirements-build.txt"), "utf8");

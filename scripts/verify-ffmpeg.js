@@ -41,6 +41,11 @@ function runFfmpeg(binary, args) {
   return `${result.stdout || ""}\n${result.stderr || ""}`;
 }
 
+function hasListedCapability(output, capability) {
+  const escaped = capability.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\s${escaped}(?:\\s|$)`).test(output);
+}
+
 function verifyFfmpeg(binary, expectedArch, expectedVersion = "8.1.2") {
   const actualArch = detectExecutableArchitecture(binary);
   if (actualArch !== expectedArch) {
@@ -55,11 +60,30 @@ function verifyFfmpeg(binary, expectedArch, expectedVersion = "8.1.2") {
   }
 
   const encoderOutput = runFfmpeg(binary, ["-hide_banner", "-encoders"]);
-  if (!encoderOutput.includes("libmp3lame")) {
-    throw new Error("FFmpeg is missing the libmp3lame encoder");
+  const requiredEncoders = ["ass", "aac", "libmp3lame", "libopus", "libx264", "libvpx-vp9"];
+  for (const encoder of requiredEncoders) {
+    if (!hasListedCapability(encoderOutput, encoder)) {
+      throw new Error(`FFmpeg is missing the ${encoder} encoder`);
+    }
   }
 
-  console.log(`FFmpeg verification passed: ${expectedVersion}, ${actualArch}, libmp3lame`);
+  const header = fs.readFileSync(binary).subarray(0, 8);
+  const isMachO = header.length >= 8 && header.readUInt32LE(0) === 0xfeedfacf;
+  if (isMachO && !hasListedCapability(encoderOutput, "h264_videotoolbox")) {
+    throw new Error("macOS FFmpeg is missing the h264_videotoolbox encoder");
+  }
+
+  const filterOutput = runFfmpeg(binary, ["-hide_banner", "-filters"]);
+  for (const filter of ["ass", "subtitles"]) {
+    if (!hasListedCapability(filterOutput, filter)) {
+      throw new Error(`FFmpeg is missing the ${filter} filter`);
+    }
+  }
+
+  console.log(
+    `FFmpeg verification passed: ${expectedVersion}, ${actualArch}, ` +
+    `${requiredEncoders.join(", ")}, ass/subtitles filters${isMachO ? ", h264_videotoolbox" : ""}`,
+  );
 }
 
 if (require.main === module) {
@@ -70,4 +94,4 @@ if (require.main === module) {
   verifyFfmpeg(binary, expectedArch, expectedVersion);
 }
 
-module.exports = { detectExecutableArchitecture, verifyFfmpeg };
+module.exports = { detectExecutableArchitecture, hasListedCapability, verifyFfmpeg };
