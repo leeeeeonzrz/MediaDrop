@@ -38,6 +38,7 @@ assert(getDevelopmentPythonCandidates("C:\\app", "win32").at(-1) === "python", "
 assert(compareVersions("V1.1.0", "1.0.7") > 0, "New release version was not detected");
 assert(compareVersions("1.0.7", "V1.0.7") === 0, "Equivalent versions did not match");
 assert(compareVersions("1.1.0-beta.1", "1.1.0") < 0, "Prerelease ordering is incorrect");
+assert(compareVersions("V1.1.2-windows.1", "1.1.1") > 0, "Windows fork release was not detected as newer than upstream 1.1.1");
 assert(appendBoundedText("abc", "def", 8) === "abcdef", "Short server logs were changed");
 assert(appendBoundedText("abcdef", "ghijk", 8) === "defghijk", "Server log buffer did not keep the newest output");
 assert(appendBoundedText("abc", "def", 0) === "", "Disabled server log buffer retained output");
@@ -53,7 +54,8 @@ const assets = [
 assert(selectReleaseAsset(assets, "darwin", "arm64")?.name.endsWith("arm64.dmg"), "macOS ARM64 asset mismatch");
 assert(selectReleaseAsset(assets, "win32", "arm64")?.name.endsWith("arm64.exe"), "Windows ARM64 asset mismatch");
 assert(selectReleaseAsset(assets, "win32", "x64")?.name === "MediaDrop.Setup.1.1.0.exe", "Windows x64 asset mismatch");
-assert(isTrustedMediaDropReleaseUrl("https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.1.0/file.exe"), "Official release URL was rejected");
+assert(isTrustedMediaDropReleaseUrl("https://github.com/leeeeeonzrz/MediaDrop/releases/download/V1.1.2-windows.1/file.exe"), "Windows fork release URL was rejected");
+assert(!isTrustedMediaDropReleaseUrl("https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.1.0/file.exe"), "Upstream release URL was trusted by the Windows fork updater");
 assert(!isTrustedMediaDropReleaseUrl("https://github.com/other/repo/releases/download/V1/file.exe"), "Foreign release URL was trusted");
 stopProcessTree(null);
 assert(hasListedCapability(" V..... libx264  H.264 encoder", "libx264"), "Exact FFmpeg encoder capability was not detected");
@@ -64,6 +66,7 @@ const packageConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "pac
 assert(packageConfig.engines.node === ">=22.12.0", "Node runtime requirement is not pinned");
 assert(packageConfig.devDependencies.electron === "41.10.3", "Electron version is not pinned");
 assert(packageConfig.devDependencies["electron-builder"] === "26.15.3", "electron-builder version is not pinned");
+assert(packageConfig.version === "1.1.2-windows.1", "Windows fork release version is not pinned");
 assert(!packageConfig.build.files.some((entry) => entry.startsWith("app/")), "Web source leaked into Electron app.asar");
 assert(!packageConfig.build.extraResources.some((entry) => entry.to === "app"), "Web resources were packaged twice");
 assert(packageConfig.build.extraResources.some((entry) => entry.to === "bin"), "Bundled runtime binaries are missing");
@@ -78,6 +81,7 @@ const mainSource = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8"
 assert(mainSource.includes("MEDIADROP_JS_RUNTIME: process.execPath"), "Electron is not exposed as yt-dlp's JavaScript runtime");
 assert(flaskSource.includes('"ELECTRON_RUN_AS_NODE"'), "yt-dlp JavaScript runtime mode is not enabled");
 assert(flaskSource.includes('"--js-runtimes"'), "yt-dlp commands do not receive the JavaScript runtime");
+assert(mainSource.includes("https://api.github.com/repos/leeeeeonzrz/MediaDrop/releases/latest"), "Windows fork updater does not use the fork release feed");
 
 const buildWorkflow = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "build.yml"), "utf8");
 assert(!buildWorkflow.includes("node-version: 20"), "Release workflow still uses unsupported Node 20");

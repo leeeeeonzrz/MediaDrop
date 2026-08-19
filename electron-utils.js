@@ -66,7 +66,7 @@ function isTrustedMediaDropReleaseUrl(value) {
   try {
     const url = new URL(value);
     return url.protocol === "https:" && url.hostname === "github.com" &&
-      url.pathname.startsWith("/henry1786580051-lang/MediaDrop/releases/");
+      url.pathname.startsWith("/leeeeeonzrz/MediaDrop/releases/");
   } catch {
     return false;
   }
