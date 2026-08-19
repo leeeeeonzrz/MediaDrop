@@ -222,7 +222,7 @@ docker run -p 8899:8899 mediadrop
 |------|------|
 | [Python 3.8+](https://www.python.org/) | 后端语言 |
 | [Flask 3.0](https://flask.palletsprojects.com/) | Web 框架 |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | 视频下载引擎 |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | 视频下载引擎；Windows 长期维护版锁定已验证的 nightly `2026.08.18.122307` |
 | [ffmpeg](https://ffmpeg.org/) | 音视频转码 |
 | [Electron 33](https://www.electronjs.org/) | 桌面应用封装 |
 | HTML / CSS / JavaScript | 前端界面（原生，无框架） |

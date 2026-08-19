@@ -1,7 +1,9 @@
 name: Build & Release
 
 env:
-  YTDLP_VERSION: '2026.07.04'
+  YTDLP_REPOSITORY: 'yt-dlp/yt-dlp-nightly-builds'
+  YTDLP_VERSION: '2026.08.18.122307'
+  YTDLP_MACOS_SHA256: '46d572488acb4b57f2b34ef05645ae56d0071b00e1f0d33a756502b62ae08822'
   FFMPEG_VERSION: '8.1.2'
   FFMPEG_WINDOWS_RELEASE: 'autobuild-2026-08-17-13-05'
 
@@ -73,9 +75,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p bundled-bin
-          curl --fail --location --retry 3 -o bundled-bin/yt-dlp_macos "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_macos"
-          curl --fail --location --retry 3 -o bundled-bin/SHA2-256SUMS "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/SHA2-256SUMS"
-          (cd bundled-bin && grep '  yt-dlp_macos$' SHA2-256SUMS | shasum -a 256 -c -)
+          curl --fail --location --retry 3 -o bundled-bin/yt-dlp_macos "https://github.com/${YTDLP_REPOSITORY}/releases/download/${YTDLP_VERSION}/yt-dlp_macos"
+          printf '%s  %s\n' "${YTDLP_MACOS_SHA256}" bundled-bin/yt-dlp_macos | shasum -a 256 -c -
           mv bundled-bin/yt-dlp_macos bundled-bin/yt-dlp
           # Trim universal binary to arm64-only to avoid macOS "Intel chip" warning
           lipo bundled-bin/yt-dlp -thin arm64 -output bundled-bin/yt-dlp 2>/dev/null || true
@@ -136,10 +137,12 @@ jobs:
         include:
           - arch: x64
             runner: windows-latest
+            ytdlp_sha256: 652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9
             ffmpeg_asset: ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip
             ffmpeg_sha256: 19b9b43e6df8839473ba22c8e22bf14b937c1e2ca40ecbd19d58afedc83ac908
           - arch: arm64
             runner: windows-11-arm
+            ytdlp_sha256: 147e9dd6f0684bfa533461c84827fa0a1f1a5ed79ce5d2085df1d3c362b2d666
             ffmpeg_asset: ffmpeg-n8.1.2-44-g7c533d0f86-winarm64-gpl-8.1.zip
             ffmpeg_sha256: bedbdfaf298650e9fc25f35c14e948db37b969d7a3bf973e7b6861ef62444031
     runs-on: ${{ matrix.runner }}
@@ -171,9 +174,8 @@ jobs:
           else
             ASSET="yt-dlp.exe"
           fi
-          curl --fail --location --retry 3 -o "bundled-bin/${ASSET}" "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/${ASSET}"
-          curl --fail --location --retry 3 -o bundled-bin/SHA2-256SUMS "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/SHA2-256SUMS"
-          (cd bundled-bin && grep "  ${ASSET}$" SHA2-256SUMS | sha256sum -c -)
+          curl --fail --location --retry 3 -o "bundled-bin/${ASSET}" "https://github.com/${YTDLP_REPOSITORY}/releases/download/${YTDLP_VERSION}/${ASSET}"
+          printf '%s  %s\n' '${{ matrix.ytdlp_sha256 }}' "bundled-bin/${ASSET}" | sha256sum -c -
           if [ "$ASSET" != "yt-dlp.exe" ]; then mv "bundled-bin/${ASSET}" bundled-bin/yt-dlp.exe; fi
 
       - name: Download FFmpeg 8.1 stable build

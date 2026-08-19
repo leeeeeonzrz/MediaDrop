@@ -89,6 +89,15 @@ assert(buildWorkflow.includes("node-version: 22"), "Release workflow does not us
 assert(buildWorkflow.includes("pip install -r app/requirements-build.txt"), "Release workflow does not use pinned Python build dependencies");
 assert(!buildWorkflow.includes("pip install flask pyinstaller"), "Release workflow still installs moving Python build dependencies");
 assert(buildWorkflow.includes("FFMPEG_VERSION: '8.1.2'"), "Release workflow FFmpeg version is not pinned");
+assert(buildWorkflow.includes("YTDLP_REPOSITORY: 'yt-dlp/yt-dlp-nightly-builds'"), "Release workflow does not use the verified yt-dlp nightly repository");
+assert(buildWorkflow.includes("YTDLP_VERSION: '2026.08.18.122307'"), "Release workflow yt-dlp nightly version is not pinned");
+for (const checksum of [
+  "652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9",
+  "147e9dd6f0684bfa533461c84827fa0a1f1a5ed79ce5d2085df1d3c362b2d666",
+  "46d572488acb4b57f2b34ef05645ae56d0071b00e1f0d33a756502b62ae08822",
+]) {
+  assert(buildWorkflow.includes(checksum), `Pinned yt-dlp nightly checksum is missing: ${checksum}`);
+}
 assert(!buildWorkflow.includes("ffmpeg-master-latest"), "Release workflow still uses a moving FFmpeg master build");
 assert(buildWorkflow.includes("FFMPEG_WINDOWS_RELEASE: 'autobuild-2026-08-17-13-05'"), "Windows FFmpeg release is not immutable");
 assert(!buildWorkflow.includes("releases/download/latest/${ASSET}"), "Windows FFmpeg download still uses a moving release");
@@ -171,6 +180,9 @@ assert(localMacBuild.includes("requirements-build.txt") && localMacBuild.include
 assert(localMacBuild.includes("verify-bundle.js") && localMacBuild.includes("hdiutil verify"), "Local macOS artifacts are not fully verified");
 const localBinaryBuild = fs.readFileSync(path.join(__dirname, "build-bin.sh"), "utf8");
 assert(localBinaryBuild.includes('PYTHON_BIN="${PYTHON_BIN:-python3}"'), "Local binary build cannot use the pinned build environment");
+assert(localBinaryBuild.includes('YTDLP_REPOSITORY="yt-dlp/yt-dlp-nightly-builds"'), "Local binary build does not use the verified yt-dlp nightly repository");
+assert(localBinaryBuild.includes('YTDLP_VERSION="2026.08.18.122307"'), "Local binary build yt-dlp nightly version is not pinned");
+assert(localBinaryBuild.includes("46d572488acb4b57f2b34ef05645ae56d0071b00e1f0d33a756502b62ae08822"), "Local binary build yt-dlp checksum is not pinned");
 
 const ffmpegVerifier = fs.readFileSync(path.join(__dirname, "verify-ffmpeg.js"), "utf8");
 for (const capability of ["ass", "aac", "libmp3lame", "libopus", "libx264", "libvpx-vp9", "h264_videotoolbox", "subtitles"]) {
