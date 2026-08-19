@@ -5,6 +5,12 @@ const { verifyFfmpeg } = require("./verify-ffmpeg");
 
 const root = path.join(__dirname, "..");
 const defaultAppPath = path.join(root, "dist", "mac-arm64", "MediaDrop.app");
+const requiredFonts = [
+  path.join("_internal", "fonts", "Roboto-Medium.ttf"),
+  path.join("_internal", "fonts", "NotoSansCJKsc-Regular.otf"),
+  path.join("_internal", "fonts", "Roboto-OFL.txt"),
+  path.join("_internal", "fonts", "NotoSansCJK-OFL.txt"),
+];
 
 function verifyMacAppSignature(appPath, commandRunner = execFileSync) {
   commandRunner(
@@ -26,10 +32,17 @@ function verifyBundle(appPath = defaultAppPath) {
     fs.accessSync(file, fs.constants.X_OK);
   }
 
+  for (const relative of requiredFonts) {
+    const file = path.join(appBinDir, relative);
+    if (!fs.existsSync(file)) {
+      throw new Error(`Missing bundled subtitle font resource: ${file}`);
+    }
+  }
+
   verifyFfmpeg(path.join(appBinDir, "ffmpeg"), "arm64", "8.1.2");
   verifyMacAppSignature(appPath);
 
-  console.log(`Bundle verification passed: signature, ${required.join(", ")}`);
+  console.log(`Bundle verification passed: signature, ${required.join(", ")} and subtitle fonts`);
 }
 
 if (require.main === module) {
