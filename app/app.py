@@ -1602,7 +1602,10 @@ def run_download(
     if format_choice != "image":
         if subtitle_mode == "embed" and format_choice == "video":
             languages = options.get("subtitle_languages", "zh.*,en.*")
-            cmd += ["--write-subs", "--sub-langs", languages, "--embed-subs"]
+            cmd += [
+                "--write-subs", "--write-auto-subs",
+                "--sub-langs", languages, "--embed-subs",
+            ]
         elif subtitle_mode == "burn" and format_choice == "video":
             language = options.get("burn_subtitle_language", "")
             cmd += [
@@ -1804,7 +1807,13 @@ def normalize_download_options(value):
     value = value if isinstance(value, dict) else {}
     container = str(value.get("container", "mp4")).lower()
     audio_quality = str(value.get("audio_quality", "192"))
-    languages = str(value.get("subtitle_languages", "zh.*,en.*")).strip()[:80]
+    raw_languages = value.get("subtitle_languages", "zh.*,en.*")
+    if isinstance(raw_languages, list):
+        languages = ",".join(
+            str(item).strip() for item in raw_languages if str(item).strip()
+        )[:80]
+    else:
+        languages = str(raw_languages).strip()[:80]
     subtitle_mode = str(value.get("subtitle_mode", "")).strip().lower()
     if subtitle_mode not in VALID_SUBTITLE_MODES:
         # Backward compatibility for jobs created before subtitle_mode existed.
@@ -1815,7 +1824,7 @@ def normalize_download_options(value):
         "audio_quality": audio_quality if audio_quality in VALID_AUDIO_QUALITIES else "192",
         "subtitle_mode": subtitle_mode,
         "subtitles": subtitle_mode == "embed",
-        "subtitle_languages": languages or "zh.*,en.*",
+        "subtitle_languages": languages,
         "burn_subtitle_language": burn_language,
         "source_is_hdr": bool(value.get("source_is_hdr")),
         "metadata": bool(value.get("metadata")),
@@ -1973,9 +1982,9 @@ def subtitle_style_for_resolution(width, height):
         if height > width
         else min(float(height), float(width) * 0.75)
     )
-    font_size = max(12, min(104, int(round(reference_height * 0.05))))
+    font_size = max(13, min(114, int(round(reference_height * 0.055))))
     horizontal_margin = max(10, int(round(width * 0.05)))
-    vertical_margin = max(10, int(round(height * 0.05)))
+    vertical_margin = max(20, int(round(height * 0.10)))
     background_padding = max(2, min(12, int(round(font_size * 0.12))))
     return {
         "font_size": font_size,
@@ -2570,6 +2579,9 @@ def start_download():
         return jsonify({"error": "Invalid video range mode"}), 400
     if preset not in VALID_PRESETS:
         return jsonify({"error": "Invalid download preset"}), 400
+    if (options["subtitle_mode"] == "embed" and format_choice == "video"
+            and not options["subtitle_languages"]):
+        return jsonify({"error": "Select at least one subtitle language to embed"}), 400
     if options["subtitle_mode"] == "burn":
         if format_choice != "video":
             return jsonify({"error": "Burned subtitles are only available for video downloads"}), 400

@@ -452,6 +452,30 @@ function currentCardFormat(idx) {
   return cardData[idx].format || 'video';
 }
 
+function selectedEmbedSubtitleCodes(value, tracks = []) {
+  const tokens = (Array.isArray(value) ? value : String(value || '').split(','))
+    .map(item => String(item || '').trim())
+    .filter(Boolean);
+  return tracks
+    .map(track => String(track.code || ''))
+    .filter(code => tokens.some(token => {
+      if (token === code) return true;
+      try {
+        return new RegExp(`^(?:${token})$`, 'i').test(code);
+      } catch (_error) {
+        return false;
+      }
+    }));
+}
+
+function embedSubtitleSummary(codes, tracks = []) {
+  if (!tracks.length) return '该视频没有可用字幕';
+  if (!codes.length) return '请选择字幕（可多选）';
+  if (codes.length > 1) return `已选 ${codes.length} 种字幕`;
+  const selected = tracks.find(track => track.code === codes[0]);
+  return selected ? `${selected.name || selected.code} (${selected.code})` : codes[0];
+}
+
 function buildDownloadRequest(card, format = card.format || 'video') {
   const options = card.options || {};
   let requestOptions = {};
@@ -461,7 +485,7 @@ function buildDownloadRequest(card, format = card.format || 'video') {
       container: options.container || 'mp4',
       subtitle_mode: options.subtitle_mode || (options.subtitles ? 'embed' : 'none'),
       subtitles: (options.subtitle_mode || (options.subtitles ? 'embed' : 'none')) === 'embed',
-      subtitle_languages: options.subtitle_languages || 'zh.*,en.*',
+      subtitle_languages: options.subtitle_languages ?? 'zh.*,en.*',
       burn_subtitle_language: options.burn_subtitle_language || '',
       source_is_hdr: Boolean(selectedFormat?.hdr),
       metadata: Boolean(options.metadata),
@@ -561,6 +585,7 @@ function friendlyError(err) {
   if (err.includes('No URL provided')) return '请先输入媒体链接';
   if (err.includes('Invalid URL')) return '链接格式无效';
   if (err.includes('Invalid video range mode')) return '动态范围选项无效';
+  if (err.includes('Select at least one subtitle language to embed')) return '请至少选择一种要内嵌的字幕语言';
   if (err.includes('Select one subtitle language to burn')) return '请选择一种要烧录到画面的字幕语言';
   if (err.includes('Burned subtitles currently support SDR video only')) return '硬字幕当前仅支持 SDR 视频';
   if (err.includes('Selected subtitle language was not downloaded')) return '没有下载到所选语种的字幕';
@@ -767,6 +792,14 @@ function renderCard(idx) {
   const options = c.options || {};
   const subtitleMode = options.subtitle_mode || (options.subtitles ? 'embed' : 'none');
   const subtitleTracks = c.subtitleTracks || [];
+  const embedSelectedCodes = selectedEmbedSubtitleCodes(
+    options.subtitle_languages ?? 'zh.*,en.*', subtitleTracks
+  );
+  const embedSubtitleOptions = subtitleTracks.map(track => {
+    const code = String(track.code || '');
+    const label = `${track.name || code} (${code})${track.automatic ? ' · 自动字幕' : ''}`;
+    return `<label class="subtitle-choice"><input type="checkbox" data-change-action="toggle-embed-subtitle" data-index="${idx}" data-language="${attr(code)}"${embedSelectedCodes.includes(code) ? ' checked' : ''}><span>${esc(label)}</span></label>`;
+  }).join('');
   const subtitleTrackOptions = subtitleTracks.map(track => {
     const label = `${track.name || track.code} (${track.code})${track.automatic ? ' · 自动字幕' : ''}`;
     return `<option value="${attr(track.code)}"${options.burn_subtitle_language === track.code ? ' selected' : ''}>${esc(label)}</option>`;
@@ -777,7 +810,7 @@ function renderCard(idx) {
       ${!isAudio && !isImage ? `<label class="select-field"><span>封装</span><select data-change-action="set-option" data-index="${idx}" data-option="container"><option value="mp4"${options.container === 'mp4' ? ' selected' : ''}>MP4</option><option value="mkv"${options.container === 'mkv' ? ' selected' : ''}>MKV</option><option value="webm"${options.container === 'webm' ? ' selected' : ''}>WebM</option></select></label>` : ''}
       ${isAudio ? `<label class="select-field"><span>音质</span><select data-change-action="set-option" data-index="${idx}" data-option="audio_quality"><option value="128"${options.audio_quality === '128' ? ' selected' : ''}>128 kbps</option><option value="192"${(options.audio_quality || '192') === '192' ? ' selected' : ''}>192 kbps</option><option value="256"${options.audio_quality === '256' ? ' selected' : ''}>256 kbps</option><option value="320"${options.audio_quality === '320' ? ' selected' : ''}>320 kbps</option></select></label>` : ''}
       ${!isImage ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="metadata"${options.metadata ? ' checked' : ''}>写入元数据</label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="embed_thumbnail"${options.embed_thumbnail ? ' checked' : ''}>嵌入封面</label>` : ''}
-      ${!isAudio && !isImage ? `<label class="select-field"><span>字幕处理</span><select data-change-action="set-subtitle-mode" data-index="${idx}"><option value="none"${subtitleMode === 'none' ? ' selected' : ''}>不处理字幕</option><option value="embed"${subtitleMode === 'embed' ? ' selected' : ''}>嵌入为可切换字幕</option><option value="burn"${subtitleMode === 'burn' ? ' selected' : ''}>烧录到视频画面</option></select></label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label>${subtitleMode === 'embed' ? `<label class="text-field"><span>字幕语言</span><input type="text" value="${attr(options.subtitle_languages || 'zh.*,en.*')}" data-change-action="set-option" data-index="${idx}" data-option="subtitle_languages"></label>` : ''}${subtitleMode === 'burn' ? `<label class="select-field"><span>烧录语言</span><select data-change-action="set-option" data-index="${idx}" data-option="burn_subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${subtitleTrackOptions}</select><span class="field-help">硬字幕会重新编码视频，并永久显示在画面中；当前仅支持 SDR。</span></label>` : ''}` : ''}
+      ${!isAudio && !isImage ? `<label class="select-field"><span>字幕处理</span><select data-change-action="set-subtitle-mode" data-index="${idx}"><option value="none"${subtitleMode === 'none' ? ' selected' : ''}>不处理字幕</option><option value="embed"${subtitleMode === 'embed' ? ' selected' : ''}>嵌入为可切换字幕</option><option value="burn"${subtitleMode === 'burn' ? ' selected' : ''}>烧录到视频画面</option></select></label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label>${subtitleMode === 'embed' ? `<div class="multi-select-field"><span>字幕语言</span><details class="subtitle-multi${subtitleTracks.length ? '' : ' disabled'}"><summary id="embed-subtitle-summary-${idx}">${esc(embedSubtitleSummary(embedSelectedCodes, subtitleTracks))}</summary>${subtitleTracks.length ? `<div class="subtitle-multi-menu">${embedSubtitleOptions}</div>` : ''}</details></div>` : ''}${subtitleMode === 'burn' ? `<label class="select-field"><span>烧录语言</span><select data-change-action="set-option" data-index="${idx}" data-option="burn_subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${subtitleTrackOptions}</select><span class="field-help">硬字幕会重新编码视频，并永久显示在画面中；当前仅支持 SDR。</span></label>` : ''}` : ''}
     </div>
   </details>`;
 
@@ -934,6 +967,22 @@ function setOption(idx, key, value) {
   cardData[idx].options = { ...(cardData[idx].options || {}), [key]: value };
 }
 
+function toggleEmbedSubtitleLanguage(idx, language, checked) {
+  const c = cardData[idx];
+  const tracks = c.subtitleTracks || [];
+  const selected = new Set(selectedEmbedSubtitleCodes(
+    c.options?.subtitle_languages ?? 'zh.*,en.*', tracks
+  ));
+  if (checked) selected.add(language);
+  else selected.delete(language);
+  const ordered = tracks
+    .map(track => String(track.code || ''))
+    .filter(code => selected.has(code));
+  c.options = { ...(c.options || {}), subtitle_languages: ordered.join(',') };
+  const summary = document.getElementById(`embed-subtitle-summary-${idx}`);
+  if (summary) summary.textContent = embedSubtitleSummary(ordered, tracks);
+}
+
 function setSubtitleMode(idx, mode) {
   const c = cardData[idx];
   c.options = { ...(c.options || {}), subtitle_mode: mode, subtitles: mode === 'embed' };
@@ -965,6 +1014,13 @@ async function dlCard(idx) {
     && c.activeRequest && downloadRequestKey(c.activeRequest) === downloadRequestKey(requested)
     ? c.jobId : null;
   c.activeRequest = requested;
+  if (c.activeRequest.options?.subtitle_mode === 'embed' &&
+      !c.activeRequest.options?.subtitle_languages) {
+    c.status = 'error';
+    c.error = 'Select at least one subtitle language to embed';
+    renderCard(idx);
+    return;
+  }
   if (c.activeRequest.options?.subtitle_mode === 'burn' &&
       !c.activeRequest.options?.burn_subtitle_language) {
     c.status = 'error';
@@ -1225,6 +1281,13 @@ document.addEventListener('change', event => {
     case 'save-cookies': void saveCookies(); break;
     case 'set-subtitle-mode':
       setSubtitleMode(Number(target.dataset.index), target.value);
+      break;
+    case 'toggle-embed-subtitle':
+      toggleEmbedSubtitleLanguage(
+        Number(target.dataset.index),
+        target.dataset.language,
+        target.checked
+      );
       break;
     case 'set-option':
       setOption(
