@@ -36,6 +36,28 @@
     </div>
     <p class="hint">多个链接可使用空格、逗号或换行分隔。</p>
 
+    <details class="local-burn">
+      <summary>本地视频 + 字幕烧录</summary>
+      <div class="local-burn-body">
+        <p class="local-burn-help">选择本地视频和 SubForge 可导出的 SRT、ASS 或 VTT 字幕，沿用相同的动态字幕样式、GPU 探测与 CPU 回退流程。当前仅支持 SDR，原文件不会被修改。</p>
+        <div class="local-burn-grid">
+          <label class="local-file-field">
+            <span>本地视频</span>
+            <span class="local-file-control"><input id="localVideoPath" type="text" readonly placeholder="请选择视频文件"><button class="secondary-btn" type="button" data-click-action="browse-local-video">选择</button></span>
+          </label>
+          <label class="local-file-field">
+            <span>字幕文件（SRT / ASS / VTT）</span>
+            <span class="local-file-control"><input id="localSubtitlePath" type="text" readonly placeholder="请选择字幕文件"><button class="secondary-btn" type="button" data-click-action="browse-local-subtitle">选择</button></span>
+          </label>
+        </div>
+        <div class="local-burn-actions">
+          <select id="localBurnContainer" aria-label="输出封装"><option value="mp4">输出 MP4</option><option value="mkv">输出 MKV</option><option value="webm">输出 WebM</option></select>
+          <button class="primary-btn" id="localBurnBtn" type="button" data-click-action="start-local-burn">开始烧录</button>
+          <span class="local-burn-status" id="localBurnStatus" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </details>
+
     <div id="cards" class="cards"></div>
     <section id="taskCenter" class="task-center" hidden>
       <div class="task-center-header"><h2>任务中心</h2><span id="taskSummary" class="task-summary"></span></div>

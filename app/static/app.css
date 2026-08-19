@@ -129,6 +129,41 @@ textarea::placeholder { color: var(--muted); }
   letter-spacing: 0;
 }
 
+.local-burn {
+  margin: 0 0 24px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--card-border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.local-burn summary { cursor: pointer; font-size: 0.78rem; font-weight: 700; color: var(--fg); }
+.local-burn-body { margin-top: 14px; }
+.local-burn-help { margin: 0 0 12px; color: var(--muted); font-size: 0.69rem; line-height: 1.5; }
+.local-burn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.local-file-field { min-width: 0; }
+.local-file-field > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 0.68rem; }
+.local-file-control { display: flex; gap: 7px; }
+.local-file-control input,
+.local-burn-actions select {
+  min-width: 0;
+  flex: 1;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--card-border);
+  border-radius: 7px;
+  background: var(--soft);
+  color: var(--fg);
+  font: 0.7rem/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.local-file-control input { text-overflow: ellipsis; }
+.local-file-control button { min-width: 62px; }
+.local-burn-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.local-burn-actions select { max-width: 112px; }
+.local-burn-actions .primary-btn { min-width: 112px; }
+.local-burn-status { min-width: 0; color: var(--muted); font-size: 0.69rem; }
+.local-burn-status.error { color: var(--error); }
+.local-burn-status.ok { color: var(--success); }
+
 .controls {
   display: flex;
   gap: 10px;
@@ -581,6 +616,7 @@ body.drawer-open { overflow: hidden; }
 .secondary-btn:hover { background: var(--soft); border-color: #bdc2bb; }
 .primary-btn { border: 1px solid var(--fg); background: var(--fg); color: #fff; }
 .primary-btn:hover { background: #181a18; }
+.primary-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .field-help { margin-top: 7px; color: var(--muted); font-size: 0.69rem; line-height: 1.45; }
 .settings-drop.drag-over input { border-color: var(--accent); background: rgba(232, 93, 42, 0.04); }
 .conditional-field[hidden] { display: none; }
@@ -649,6 +685,10 @@ body.drawer-open { overflow: hidden; }
   .settings-launcher .label { display: none; }
   .url-composer { grid-template-columns: 1fr; }
   .url-composer .fetch-btn { min-height: 44px; }
+  .local-burn-grid { grid-template-columns: 1fr; }
+  .local-burn-actions { align-items: stretch; flex-wrap: wrap; }
+  .local-burn-actions select { max-width: none; }
+  .local-burn-status { width: 100%; }
   .card { flex-direction: column; gap: 10px; }
   .card-thumb {
     width: 100%;
