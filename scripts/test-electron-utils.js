@@ -98,7 +98,6 @@ assert(buildWorkflow.includes("19b9b43e6df8839473ba22c8e22bf14b937c1e2ca40ecbd19
 assert(buildWorkflow.includes("bedbdfaf298650e9fc25f35c14e948db37b969d7a3bf973e7b6861ef62444031"), "Windows ARM64 FFmpeg checksum is missing");
 assert(buildWorkflow.includes("Roboto-OFL.txt"), "Release builds no longer verify the Roboto license");
 assert(buildWorkflow.includes("NotoSansCJK-OFL.txt"), "Release builds no longer verify the Noto license");
-const mainSource = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
 const preloadSource = fs.readFileSync(path.join(__dirname, "..", "preload.js"), "utf8");
 assert(mainSource.includes('ipcMain.handle("select-local-video"'), "Local video picker IPC is missing");
 assert(mainSource.includes('extensions: ["srt", "ass", "vtt"]'), "SubForge subtitle picker formats changed");
