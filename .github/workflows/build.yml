@@ -96,9 +96,14 @@ jobs:
       - name: Verify hard-subtitle runtime
         shell: bash
         run: |
-          bundled-bin/ffmpeg -hide_banner -filters 2>&1 | grep -E ' (ass|subtitles) '
-          bundled-bin/ffmpeg -hide_banner -encoders 2>&1 | grep -E 'libx264|libvpx-vp9'
-          bundled-bin/ffmpeg -hide_banner -encoders 2>&1 | grep 'h264_videotoolbox'
+          FILTERS="$(bundled-bin/ffmpeg -hide_banner -filters 2>&1)"
+          ENCODERS="$(bundled-bin/ffmpeg -hide_banner -encoders 2>&1)"
+          for FILTER in ass subtitles; do
+            grep -E "[[:space:]]${FILTER}([[:space:]]|$)" <<< "$FILTERS"
+          done
+          for ENCODER in ass aac libmp3lame libopus libx264 libvpx-vp9 h264_videotoolbox; do
+            grep -E "[[:space:]]${ENCODER}([[:space:]]|$)" <<< "$ENCODERS"
+          done
           test -f bundled-bin/_internal/fonts/Roboto-Medium.ttf
           test -f bundled-bin/_internal/fonts/NotoSansCJKsc-Regular.otf
           test -f bundled-bin/_internal/fonts/Roboto-OFL.txt
@@ -196,9 +201,15 @@ jobs:
       - name: Verify hard-subtitle runtime
         shell: bash
         run: |
-          bundled-bin/ffmpeg.exe -hide_banner -filters 2>&1 | grep -E ' (ass|subtitles) '
-          bundled-bin/ffmpeg.exe -hide_banner -encoders 2>&1 | grep -E 'libx264|libvpx-vp9'
-          bundled-bin/ffmpeg.exe -hide_banner -encoders 2>&1 | grep -E 'h264_(nvenc|qsv|amf)'
+          FILTERS="$(bundled-bin/ffmpeg.exe -hide_banner -filters 2>&1)"
+          ENCODERS="$(bundled-bin/ffmpeg.exe -hide_banner -encoders 2>&1)"
+          for FILTER in ass subtitles; do
+            grep -E "[[:space:]]${FILTER}([[:space:]]|$)" <<< "$FILTERS"
+          done
+          for ENCODER in ass aac libmp3lame libopus libx264 libvpx-vp9; do
+            grep -E "[[:space:]]${ENCODER}([[:space:]]|$)" <<< "$ENCODERS"
+          done
+          grep -E 'h264_(nvenc|qsv|amf)' <<< "$ENCODERS"
           test -f bundled-bin/_internal/fonts/Roboto-Medium.ttf
           test -f bundled-bin/_internal/fonts/NotoSansCJKsc-Regular.otf
           test -f bundled-bin/_internal/fonts/Roboto-OFL.txt

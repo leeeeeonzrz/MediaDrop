@@ -36,10 +36,14 @@ chmod +x "$BUNDLED_BIN/mediadrop-server" "$BUNDLED_BIN/yt-dlp" "$BUNDLED_BIN/ffm
 
 "$BUNDLED_BIN/yt-dlp" --version
 "$BUNDLED_BIN/ffmpeg" -version 2>&1 | sed -n '1p' | grep -Eq "ffmpeg version n?${FFMPEG_VERSION}([ .-]|$)"
-"$BUNDLED_BIN/ffmpeg" -hide_banner -encoders 2>&1 | grep 'libmp3lame' >/dev/null
-"$BUNDLED_BIN/ffmpeg" -hide_banner -filters 2>&1 | grep -E ' (ass|subtitles) '
-"$BUNDLED_BIN/ffmpeg" -hide_banner -encoders 2>&1 | grep -E 'libx264|libvpx-vp9'
-"$BUNDLED_BIN/ffmpeg" -hide_banner -encoders 2>&1 | grep 'h264_videotoolbox'
+FILTERS="$("$BUNDLED_BIN/ffmpeg" -hide_banner -filters 2>&1)"
+ENCODERS="$("$BUNDLED_BIN/ffmpeg" -hide_banner -encoders 2>&1)"
+for FILTER in ass subtitles; do
+  grep -E "[[:space:]]${FILTER}([[:space:]]|$)" <<< "$FILTERS"
+done
+for ENCODER in ass aac libmp3lame libopus libx264 libvpx-vp9 h264_videotoolbox; do
+  grep -E "[[:space:]]${ENCODER}([[:space:]]|$)" <<< "$ENCODERS"
+done
 test -f "$BUNDLED_BIN/_internal/fonts/Roboto-Medium.ttf"
 test -f "$BUNDLED_BIN/_internal/fonts/NotoSansCJKsc-Regular.otf"
 test -f "$BUNDLED_BIN/_internal/fonts/Roboto-OFL.txt"
