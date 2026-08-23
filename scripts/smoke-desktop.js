@@ -47,8 +47,10 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, 100));
       const healthResponse = await fetch('/api/health');
       const health = await healthResponse.json();
-      const versionResponse = await fetch('/api/ytdlp/version');
+      const versionResponse = await fetch('/api/ytdlp/version?channel=stable');
       const version = await versionResponse.json();
+      const releasesResponse = await fetch('/api/ytdlp/releases?channel=nightly&limit=3');
+      const releases = await releasesResponse.json();
       const scriptResponse = await fetch('/static/app.js');
       return {
         before,
@@ -58,6 +60,12 @@ async function main() {
         health,
         ytdlpStatus: versionResponse.status,
         ytdlpVersion: version.current || version.version || null,
+        ytdlpChannelControl: document.getElementById('ytdlpChannel')?.tagName || null,
+        ytdlpReleaseControl: document.getElementById('ytdlpRelease')?.tagName || null,
+        releasesStatus: releasesResponse.status,
+        releasesChannel: releases.channel || null,
+        releaseVersions: (releases.releases || []).map((release) => release.version),
+        installableReleases: (releases.releases || []).filter((release) => release.available).length,
         scriptStatus: scriptResponse.status,
         scriptContentType: scriptResponse.headers.get('content-type'),
       };
@@ -82,6 +90,12 @@ async function main() {
   assert.strictEqual(result.healthStatus, 200);
   assert.strictEqual(result.ytdlpStatus, 200);
   assert.strictEqual(result.ytdlpVersion, "2026.08.18.122307");
+  assert.strictEqual(result.ytdlpChannelControl, "SELECT");
+  assert.strictEqual(result.ytdlpReleaseControl, "SELECT");
+  assert.strictEqual(result.releasesStatus, 200);
+  assert.strictEqual(result.releasesChannel, "nightly");
+  assert.strictEqual(result.releaseVersions.length, 3);
+  assert(result.installableReleases > 0);
   assert.strictEqual(result.scriptStatus, 200);
   assert.match(result.scriptContentType || "", /javascript/i);
   assert.deepStrictEqual(state.exceptions, []);

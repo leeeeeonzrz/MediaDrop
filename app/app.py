@@ -1210,23 +1210,47 @@ def get_ytdlp_javascript_args():
     return []
 
 
-def run_ytdlp_version(path):
-    try:
-        result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20, env=get_ytdlp_env())
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return None
-    except Exception:
-        return None
+YTDLP_CHANNELS = {
+    "stable": {"label": "稳定版", "repository": "yt-dlp/yt-dlp"},
+    "nightly": {"label": "夜间版", "repository": "yt-dlp/yt-dlp-nightly-builds"},
+}
+YTDLP_RELEASE_HISTORY_LIMIT = 30
 
 
-def get_latest_ytdlp_release():
+def normalize_ytdlp_channel(channel):
+    value = str(channel or "stable").strip().lower()
+    if value not in YTDLP_CHANNELS:
+        raise ValueError("yt-dlp channel must be stable or nightly")
+    return value
+
+
+def normalize_ytdlp_version(version):
+    value = str(version or "").strip()
+    if value and not re.fullmatch(r"\d{4}\.\d{2}\.\d{2}(?:\.\d{6})?", value):
+        raise ValueError("Invalid yt-dlp release version")
+    return value
+
+
+def get_ytdlp_release_api_url(channel, version=None):
+    channel = normalize_ytdlp_channel(channel)
+    repository = YTDLP_CHANNELS[channel]["repository"]
+    version = normalize_ytdlp_version(version)
+    if version:
+        quoted_version = urllib.parse.quote(version, safe="")
+        return f"https://api.github.com/repos/{repository}/releases/tags/{quoted_version}"
+    return f"https://api.github.com/repos/{repository}/releases/latest"
+
+
+def fetch_github_release_json(url):
     req = urllib.request.Request(
-        "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
+        url,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "MediaDrop"},
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def parse_ytdlp_release(data):
     assets = {
         asset.get("name", ""): asset.get("browser_download_url", "")
         for asset in data.get("assets", [])
@@ -1237,8 +1261,74 @@ def get_latest_ytdlp_release():
         "name": data.get("name", ""),
         "url": data.get("html_url", ""),
         "published_at": data.get("published_at", ""),
+        "draft": bool(data.get("draft")),
+        "prerelease": bool(data.get("prerelease")),
         "assets": assets,
     }
+
+
+def run_ytdlp_version(path):
+    try:
+        result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20, env=get_ytdlp_env())
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return None
+    except Exception:
+        return None
+
+
+def get_ytdlp_release(channel="stable", version=None):
+    channel = normalize_ytdlp_channel(channel)
+    release = parse_ytdlp_release(
+        fetch_github_release_json(get_ytdlp_release_api_url(channel, version))
+    )
+    if release["draft"]:
+        raise RuntimeError("Selected yt-dlp release is still a draft")
+    if channel == "stable" and release["prerelease"]:
+        raise RuntimeError("Prerelease yt-dlp builds are not part of the stable channel")
+    if version and release["version"] != normalize_ytdlp_version(version):
+        raise RuntimeError("Selected yt-dlp release version does not match")
+    return release
+
+
+def get_latest_ytdlp_release():
+    """Compatibility helper for callers that expect the latest stable release."""
+    return get_ytdlp_release("stable")
+
+
+def get_ytdlp_release_history(channel="stable", limit=YTDLP_RELEASE_HISTORY_LIMIT):
+    channel = normalize_ytdlp_channel(channel)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        raise ValueError("yt-dlp release limit must be a number")
+    if not 1 <= limit <= 100:
+        raise ValueError("yt-dlp release limit must be between 1 and 100")
+    repository = YTDLP_CHANNELS[channel]["repository"]
+    url = f"https://api.github.com/repos/{repository}/releases?per_page={limit}"
+    payload = fetch_github_release_json(url)
+    if not isinstance(payload, list):
+        raise RuntimeError("Could not read yt-dlp release history")
+    asset_name = get_ytdlp_asset_name()
+    releases = []
+    for item in payload:
+        release = parse_ytdlp_release(item)
+        version = release["version"]
+        try:
+            normalize_ytdlp_version(version)
+        except ValueError:
+            continue
+        if release["draft"] or (channel == "stable" and release["prerelease"]) or not version:
+            continue
+        assets = release["assets"]
+        releases.append({
+            "version": version,
+            "name": release["name"],
+            "url": release["url"],
+            "published_at": release["published_at"],
+            "available": bool(assets.get(asset_name) and assets.get("SHA2-256SUMS")),
+        })
+    return releases
 
 
 def compare_version_strings(a, b):
@@ -1251,12 +1341,13 @@ def compare_version_strings(a, b):
     return (aa > bb) - (aa < bb)
 
 
-def get_ytdlp_versions():
+def get_ytdlp_versions(channel="stable"):
+    channel = normalize_ytdlp_channel(channel)
     current_path = get_ytdlp_path()
     current = run_ytdlp_version(current_path)
     bundled = run_ytdlp_version(get_bundled_ytdlp_path()) if get_bundled_ytdlp_path() else None
     updated = run_ytdlp_version(get_updatable_ytdlp_path()) if get_updatable_ytdlp_path() else None
-    latest = get_latest_ytdlp_release()
+    latest = get_ytdlp_release(channel)
     latest_version = latest.get("version", "")
     return {
         "current": current,
@@ -1268,11 +1359,19 @@ def get_ytdlp_versions():
         "release_url": latest.get("url", ""),
         "published_at": latest.get("published_at", ""),
         "path": current_path,
+        "channel": channel,
+        "channel_label": YTDLP_CHANNELS[channel]["label"],
     }
 
 
-def download_latest_ytdlp():
-    latest = get_latest_ytdlp_release()
+def download_ytdlp_release(channel="stable", version=None):
+    channel = normalize_ytdlp_channel(channel)
+    requested_version = normalize_ytdlp_version(version)
+    latest = (
+        get_latest_ytdlp_release()
+        if channel == "stable" and not requested_version
+        else get_ytdlp_release(channel, requested_version or None)
+    )
     asset_name = get_ytdlp_asset_name()
     assets = latest.get("assets") or {}
     url = assets.get(asset_name)
@@ -1323,7 +1422,13 @@ def download_latest_ytdlp():
         "latest": latest.get("version", ""),
         "path": final_path,
         "release_url": latest.get("url", ""),
+        "channel": channel,
     }
+
+
+def download_latest_ytdlp():
+    """Compatibility helper for installing the latest stable release."""
+    return download_ytdlp_release("stable")
 
 
 def process_download_queue():
@@ -2905,9 +3010,37 @@ def reorder_queue():
 @app.route("/api/ytdlp/version")
 def ytdlp_version():
     try:
-        return jsonify(get_ytdlp_versions())
+        return jsonify(get_ytdlp_versions(request.args.get("channel", "stable")))
     except urllib.error.URLError as e:
         return jsonify({"error": f"Could not check latest yt-dlp release: {e.reason}"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/ytdlp/releases")
+def ytdlp_releases():
+    try:
+        channel = normalize_ytdlp_channel(request.args.get("channel", "stable"))
+        limit = request.args.get("limit", YTDLP_RELEASE_HISTORY_LIMIT)
+        current_path = get_ytdlp_path()
+        current = run_ytdlp_version(current_path)
+        releases = get_ytdlp_release_history(channel, limit)
+        for release in releases:
+            release["current"] = bool(current and release["version"] == current)
+        bundled_path = get_bundled_ytdlp_path()
+        updated_path = get_updatable_ytdlp_path()
+        return jsonify({
+            "channel": channel,
+            "channel_label": YTDLP_CHANNELS[channel]["label"],
+            "repository": YTDLP_CHANNELS[channel]["repository"],
+            "current": current,
+            "bundled": run_ytdlp_version(bundled_path) if bundled_path else None,
+            "updated": run_ytdlp_version(updated_path) if updated_path else None,
+            "using_updated": bool(updated_path),
+            "releases": releases,
+        })
+    except urllib.error.URLError as e:
+        return jsonify({"error": f"Could not check yt-dlp release history: {e.reason}"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -2915,7 +3048,11 @@ def ytdlp_version():
 @app.route("/api/ytdlp/update", methods=["POST"])
 def ytdlp_update():
     try:
-        return jsonify(download_latest_ytdlp())
+        data = request.get_json(silent=True) or {}
+        return jsonify(download_ytdlp_release(
+            data.get("channel", "stable"),
+            data.get("version"),
+        ))
     except urllib.error.URLError as e:
         return jsonify({"error": f"Could not download yt-dlp: {e.reason}"}), 400
     except Exception as e:

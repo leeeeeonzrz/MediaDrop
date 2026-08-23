@@ -1,6 +1,7 @@
 import atexit
 import concurrent.futures
 import errno
+import hashlib
 import importlib.util
 import io
 import json
@@ -1213,6 +1214,9 @@ class PersistenceAndApiTests(unittest.TestCase):
         self.assertIn('/static/app.js', html)
         self.assertNotIn('onclick=', html)
         self.assertNotIn('unsafe-inline', policy)
+        self.assertIn('id="ytdlpChannel"', html)
+        self.assertIn('id="ytdlpRelease"', html)
+        self.assertIn("change-ytdlp-channel", html)
         self.assertIn("script-src 'self'", policy)
         self.assertIn("style-src 'self'", policy)
 
@@ -1597,10 +1601,145 @@ class PersistenceAndApiTests(unittest.TestCase):
         self.assertFalse(cache.exists())
         self.assertFalse(server.jobs["expired-failure"]["resumable"])
 
+    def test_ytdlp_release_channels_use_only_official_repositories(self):
+        self.assertEqual(
+            server.get_ytdlp_release_api_url("stable", "2026.08.19"),
+            "https://api.github.com/repos/yt-dlp/yt-dlp/releases/tags/2026.08.19",
+        )
+        self.assertEqual(
+            server.get_ytdlp_release_api_url("nightly", "2026.08.20.234504"),
+            "https://api.github.com/repos/yt-dlp/yt-dlp-nightly-builds/releases/tags/2026.08.20.234504",
+        )
+        with self.assertRaisesRegex(ValueError, "channel"):
+            server.get_ytdlp_release_api_url("third-party")
+        with self.assertRaisesRegex(ValueError, "Invalid"):
+            server.get_ytdlp_release_api_url("stable", "../../latest")
+
+    def test_ytdlp_release_history_reports_installable_platform_assets(self):
+        def release(version, assets, draft=False):
+            return {
+                "tag_name": version,
+                "name": version,
+                "html_url": f"https://github.com/yt-dlp/yt-dlp/releases/tag/{version}",
+                "published_at": "2026-08-20T00:00:00Z",
+                "draft": draft,
+                "assets": [
+                    {"name": name, "browser_download_url": f"https://example.com/{name}"}
+                    for name in assets
+                ],
+            }
+
+        payload = [
+            release("2026.08.20.234504", ["yt-dlp.exe", "SHA2-256SUMS"]),
+            release("2026.08.19.233000", ["yt-dlp.exe"]),
+            release("not-a-version", ["yt-dlp.exe", "SHA2-256SUMS"]),
+            release("2026.08.18.122307", ["yt-dlp.exe", "SHA2-256SUMS"], draft=True),
+        ]
+        with mock.patch.object(server, "fetch_github_release_json", return_value=payload), \
+             mock.patch.object(server, "get_ytdlp_asset_name", return_value="yt-dlp.exe"):
+            releases = server.get_ytdlp_release_history("nightly", 10)
+
+        self.assertEqual([item["version"] for item in releases], [
+            "2026.08.20.234504", "2026.08.19.233000",
+        ])
+        self.assertTrue(releases[0]["available"])
+        self.assertFalse(releases[1]["available"])
+
+    def test_ytdlp_release_api_and_selected_install_route(self):
+        history = [{
+            "version": "2026.08.20.234504",
+            "name": "nightly",
+            "url": "https://example.com/release",
+            "published_at": "2026-08-20T00:00:00Z",
+            "available": True,
+        }]
+        client = server.app.test_client()
+        with mock.patch.object(server, "get_ytdlp_path", return_value="yt-dlp"), \
+             mock.patch.object(server, "run_ytdlp_version", return_value="2026.08.20.234504"), \
+             mock.patch.object(server, "get_bundled_ytdlp_path", return_value=None), \
+             mock.patch.object(server, "get_updatable_ytdlp_path", return_value=None), \
+             mock.patch.object(server, "get_ytdlp_release_history", return_value=history):
+            response = client.get("/api/ytdlp/releases?channel=nightly&limit=10")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["channel"], "nightly")
+        self.assertEqual(payload["repository"], "yt-dlp/yt-dlp-nightly-builds")
+        self.assertTrue(payload["releases"][0]["current"])
+
+        installed = {
+            "version": "2026.08.19",
+            "latest": "2026.08.19",
+            "channel": "stable",
+            "path": "tools/yt-dlp.exe",
+        }
+        with mock.patch.object(server, "download_ytdlp_release", return_value=installed) as download:
+            response = client.post(
+                "/api/ytdlp/update",
+                json={"channel": "stable", "version": "2026.08.19"},
+            )
+        self.assertEqual(response.status_code, 200)
+        download.assert_called_once_with("stable", "2026.08.19")
+
+    def test_ytdlp_release_api_rejects_invalid_channel_and_limit(self):
+        client = server.app.test_client()
+        self.assertEqual(
+            client.get("/api/ytdlp/releases?channel=third-party").status_code,
+            400,
+        )
+        self.assertEqual(
+            client.get("/api/ytdlp/releases?channel=stable&limit=101").status_code,
+            400,
+        )
+
+    def test_selected_ytdlp_release_is_verified_before_atomic_install(self):
+        tools = pathlib.Path(self.base_dir) / "tools"
+        tools.mkdir()
+        final_name = "yt-dlp.exe" if server.sys.platform == "win32" else "yt-dlp"
+        target = tools / final_name
+        target.write_bytes(b"old version")
+        binary = b"verified nightly binary"
+        asset_name = server.select_ytdlp_asset_name(server.sys.platform, server.platform.machine())
+        digest = hashlib.sha256(binary).hexdigest()
+        release = {
+            "tag_name": "2026.08.20.234504",
+            "name": "nightly",
+            "html_url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/tag/2026.08.20.234504",
+            "published_at": "2026-08-20T00:00:00Z",
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {"name": asset_name, "browser_download_url": "https://example.com/bin"},
+                {"name": "SHA2-256SUMS", "browser_download_url": "https://example.com/sums"},
+            ],
+        }
+
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+
+        def urlopen(url, timeout=None):
+            if url.endswith("sums"):
+                return Response(f"{digest}  {asset_name}\n".encode())
+            return Response(binary)
+
+        with mock.patch.object(server, "fetch_github_release_json", return_value=release) as fetch, \
+             mock.patch.object(server.urllib.request, "urlopen", side_effect=urlopen), \
+             mock.patch.object(server, "run_ytdlp_version", return_value="2026.08.20.234504"):
+            result = server.download_ytdlp_release("nightly", "2026.08.20.234504")
+
+        fetch.assert_called_once_with(
+            "https://api.github.com/repos/yt-dlp/yt-dlp-nightly-builds/releases/tags/2026.08.20.234504"
+        )
+        self.assertEqual(target.read_bytes(), binary)
+        self.assertEqual(result["channel"], "nightly")
+        self.assertEqual(result["version"], "2026.08.20.234504")
+
     def test_ytdlp_checksum_failure_preserves_current_binary(self):
         tools = pathlib.Path(self.base_dir) / "tools"
         tools.mkdir()
-        current = tools / "yt-dlp"
+        final_name = "yt-dlp.exe" if server.sys.platform == "win32" else "yt-dlp"
+        current = tools / final_name
         current.write_bytes(b"working version")
         release = {
             "version": "2026.07.17", "url": "https://example.com/release",

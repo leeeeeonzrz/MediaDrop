@@ -8,6 +8,7 @@ let settingsLoaded = false;
 let settingsMessageTimer = null;
 let currentAppUpdateState = null;
 let dismissedAppUpdateVersion = null;
+let currentYtdlpVersion = null;
 
 function openSettings() {
   document.getElementById('settingsDrawer').classList.add('open');
@@ -309,37 +310,108 @@ async function testCookies() {
   }
 }
 
+function compareYtdlpVersions(left, right) {
+  const parts = value => String(value || '').match(/\d+/g)?.map(Number) || [];
+  const a = parts(left);
+  const b = parts(right);
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference) return difference < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+function refreshYtdlpInstallButton() {
+  const select = document.getElementById('ytdlpRelease');
+  const button = document.getElementById('updateYtdlpBtn');
+  const selected = select.value;
+  button.hidden = !selected;
+  button.textContent = selected && selected === currentYtdlpVersion
+    ? '重新安装所选版本'
+    : '安装所选版本';
+}
+
 async function checkYtdlp() {
   const version = document.getElementById('ytdlpVersion');
+  const channel = document.getElementById('ytdlpChannel').value;
+  const releaseSelect = document.getElementById('ytdlpRelease');
   const updateButton = document.getElementById('updateYtdlpBtn');
   version.textContent = '正在检查...';
-  setSettingsMsg('', '正在检查 yt-dlp 更新...');
+  releaseSelect.disabled = true;
+  releaseSelect.innerHTML = '<option value="">正在获取版本列表...</option>';
+  updateButton.hidden = true;
+  setSettingsMsg('', '正在获取 yt-dlp 历史版本...');
   try {
-    const res = await fetch('/api/ytdlp/version');
+    const res = await fetch(`/api/ytdlp/releases?channel=${encodeURIComponent(channel)}&limit=30`);
     const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'Could not check yt-dlp');
-    version.textContent = data.current || '未知版本';
-    updateButton.hidden = !data.update_available;
-    const status = data.update_available ? `发现新版本 ${data.latest || ''}` : 'yt-dlp 已是最新版本';
-    setSettingsMsg(data.update_available ? '' : 'ok', status);
+    if (!res.ok || data.error) throw new Error(data.error || 'Could not check yt-dlp release history');
+    currentYtdlpVersion = data.current || null;
+    version.textContent = currentYtdlpVersion || '未知版本';
+    const available = (data.releases || []).filter(release => release.available);
+    releaseSelect.innerHTML = '';
+    if (!available.length) {
+      releaseSelect.innerHTML = '<option value="">没有可安装的版本</option>';
+      setSettingsMsg('err', '没有找到适用于当前系统的 yt-dlp 版本');
+      return;
+    }
+    for (const release of available) {
+      const option = document.createElement('option');
+      option.value = release.version;
+      const date = release.published_at ? release.published_at.slice(0, 10) : '';
+      option.textContent = [
+        release.version,
+        release.current ? '（当前）' : '',
+        date ? ` · ${date}` : '',
+      ].join('');
+      releaseSelect.appendChild(option);
+    }
+    releaseSelect.disabled = false;
+    refreshYtdlpInstallButton();
+    setSettingsMsg('ok', `已获取${data.channel_label || ''}历史版本，共 ${available.length} 个`);
   } catch (err) {
     version.textContent = '检查失败';
+    releaseSelect.innerHTML = '<option value="">获取失败</option>';
     setSettingsMsg('err', friendlyError(err.message));
   }
 }
 
 async function updateYtdlp() {
-  setSettingsMsg('', '正在更新 yt-dlp...');
+  const channel = document.getElementById('ytdlpChannel').value;
+  const releaseSelect = document.getElementById('ytdlpRelease');
+  const selectedVersion = releaseSelect.value;
+  const updateButton = document.getElementById('updateYtdlpBtn');
+  if (!selectedVersion) {
+    setSettingsMsg('err', '请先获取并选择 yt-dlp 版本');
+    return;
+  }
+  if (currentYtdlpVersion && compareYtdlpVersions(selectedVersion, currentYtdlpVersion) < 0) {
+    const confirmed = window.confirm(
+      `所选版本 ${selectedVersion} 早于当前版本 ${currentYtdlpVersion}，确定要降级吗？`
+    );
+    if (!confirmed) return;
+  }
+  updateButton.disabled = true;
+  releaseSelect.disabled = true;
+  setSettingsMsg('', `正在安装 yt-dlp ${selectedVersion}...`);
   try {
-    const res = await fetch('/api/ytdlp/update', { method: 'POST' });
+    const res = await fetch('/api/ytdlp/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel, version: selectedVersion }),
+    });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'yt-dlp update failed');
-    const current = data.version || data.latest || '最新版本';
+    const current = data.version || data.latest || selectedVersion;
+    currentYtdlpVersion = current;
     document.getElementById('ytdlpVersion').textContent = current;
-    document.getElementById('updateYtdlpBtn').hidden = true;
-    setSettingsMsg('ok', `yt-dlp 已更新至 ${current}`);
+    refreshYtdlpInstallButton();
+    setSettingsMsg('ok', `yt-dlp 已安装为 ${current}`);
   } catch (err) {
     setSettingsMsg('err', friendlyError(err.message));
+  } finally {
+    updateButton.disabled = false;
+    releaseSelect.disabled = false;
   }
 }
 
@@ -586,6 +658,9 @@ function friendlyError(err) {
   if (err.includes('Cookie test failed')) return 'Cookie 测试失败';
   if (err.includes('Could not check yt-dlp')) return '无法检查 yt-dlp 更新';
   if (err.includes('Could not check latest yt-dlp release')) return '无法获取最新的 yt-dlp 版本信息';
+  if (err.includes('Could not check yt-dlp release history')) return '无法获取 yt-dlp 历史版本';
+  if (err.includes('yt-dlp channel must be stable or nightly')) return '不支持的 yt-dlp 版本通道';
+  if (err.includes('Invalid yt-dlp release version')) return '无效的 yt-dlp 版本';
   if (err.includes('Could not download yt-dlp')) return '无法下载 yt-dlp 更新';
   if (err.includes('yt-dlp update failed')) return 'yt-dlp 更新失败';
   if (err.includes('Lost connection to server')) return '与下载服务的连接已中断';
@@ -1301,6 +1376,8 @@ document.addEventListener('change', event => {
   switch (target.dataset.changeAction) {
     case 'save-concurrency': void saveConcurrency(); break;
     case 'change-auth-mode': void changeAuthMode(); break;
+    case 'change-ytdlp-channel': void checkYtdlp(); break;
+    case 'change-ytdlp-release': refreshYtdlpInstallButton(); break;
     case 'save-cookies': void saveCookies(); break;
     case 'set-subtitle-mode':
       setSubtitleMode(Number(target.dataset.index), target.value);
