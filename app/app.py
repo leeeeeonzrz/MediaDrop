@@ -2096,7 +2096,11 @@ def probe_video_for_burn(video_path, ffmpeg_path=None):
         max(1, int(round(float(bitrate_match.group(1)))))
         if bitrate_match else None
     )
-    return width, height, duration, has_attached_picture, video_bitrate_kbps
+    frame_rate_match = re.search(r"(\d+(?:\.\d+)?)\s*fps(?:[\s,]|$)", video_line)
+    if not frame_rate_match:
+        frame_rate_match = re.search(r"(\d+(?:\.\d+)?)\s*tbr(?:[\s,]|$)", video_line)
+    frame_rate = float(frame_rate_match.group(1)) if frame_rate_match else None
+    return width, height, duration, has_attached_picture, video_bitrate_kbps, frame_rate
 
 
 def video_is_hdr_for_burn(video_path, ffmpeg_path=None):
@@ -2380,7 +2384,46 @@ def disable_hardware_burn_encoder(ffmpeg_path, container):
         hardware_encoder_cache[cache_key] = None
 
 
-def _run_subtitle_burn_process(job_id, job, command, duration, encoder_name, hardware):
+def _ffmpeg_progress_seconds(values, frame_rate=None):
+    """Resolve an FFmpeg progress block to encoded media time.
+
+    Some stream mappings and containers can make every out_time field N/A even
+    while the main video is encoding normally. This includes, but is not limited
+    to, inputs with an attached-picture stream. In that case, use the main video
+    frame count and its probed frame rate as a stable progress fallback.
+    """
+    for key in ("out_time_us", "out_time_ms"):
+        try:
+            microseconds = float(values.get(key, ""))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(microseconds) and microseconds >= 0:
+            return microseconds / 1_000_000
+
+    clock = str(values.get("out_time", "") or "")
+    match = re.fullmatch(r"(\d+):(\d+):(\d+(?:\.\d+)?)", clock)
+    if match:
+        hours, minutes, seconds = match.groups()
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+    try:
+        frame = float(values.get("frame", ""))
+        frame_rate = float(frame_rate)
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(frame)
+        or not math.isfinite(frame_rate)
+        or frame < 0
+        or frame_rate <= 0
+    ):
+        return None
+    return frame / frame_rate
+
+
+def _run_subtitle_burn_process(
+    job_id, job, command, duration, frame_rate, encoder_name, hardware
+):
     proc = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -2405,6 +2448,7 @@ def _run_subtitle_burn_process(job_id, job, command, duration, encoder_name, har
     }
     persist_job(job_id, force=True)
     last_lines = []
+    progress_values = {}
     for raw_line in proc.stdout:
         line = raw_line.strip()
         if not line:
@@ -2412,15 +2456,17 @@ def _run_subtitle_burn_process(job_id, job, command, duration, encoder_name, har
         last_lines.append(line)
         if len(last_lines) > 12:
             last_lines.pop(0)
-        if not duration or "=" not in line:
+        if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        if key not in ("out_time_us", "out_time_ms"):
+        progress_values[key] = value
+        if key != "progress":
             continue
-        try:
-            completed_seconds = max(0.0, float(value) / 1_000_000)
-        except ValueError:
+        completed_seconds = _ffmpeg_progress_seconds(progress_values, frame_rate)
+        progress_values = {}
+        if not duration or completed_seconds is None:
             continue
+        completed_seconds = max(0.0, completed_seconds)
         fraction = max(0.0, min(0.999, completed_seconds / duration))
         elapsed = max(0.001, time.monotonic() - started)
         eta_seconds = (elapsed / fraction - elapsed) if fraction > 0.01 else None
@@ -2439,9 +2485,14 @@ def burn_subtitle_into_video(
 ):
     ffmpeg_path = get_ffmpeg_path()
     ensure_subtitle_ffmpeg_support(ffmpeg_path)
-    width, height, duration, has_attached_picture, source_bitrate_kbps = probe_video_for_burn(
-        video_path, ffmpeg_path
-    )
+    (
+        width,
+        height,
+        duration,
+        has_attached_picture,
+        source_bitrate_kbps,
+        frame_rate,
+    ) = probe_video_for_burn(video_path, ffmpeg_path)
     job_cache_dir = job["cache_dir"]
     ass_path = os.path.join(job_cache_dir, f"{job_id}.burn.ass")
     output_path = os.path.join(job_cache_dir, f"{job_id}.burned{ext}")
@@ -2487,7 +2538,7 @@ def burn_subtitle_into_video(
             "-progress", "pipe:1", "-nostats", output_path,
         ]
         returncode, last_lines = _run_subtitle_burn_process(
-            job_id, job, command, duration, encoder_name, bool(encoder)
+            job_id, job, command, duration, frame_rate, encoder_name, bool(encoder)
         )
         if job.get("status") == "cancelled":
             raise RuntimeError("Subtitle burn was cancelled")

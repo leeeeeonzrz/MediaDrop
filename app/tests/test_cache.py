@@ -259,7 +259,7 @@ class SubtitleBurnTests(unittest.TestCase):
         with mock.patch.object(server.subprocess, "run", return_value=probe) as run:
             result = server.probe_video_for_burn("sample.mp4", "ffmpeg")
 
-        self.assertEqual(result, (1920, 1080, 62.5, True, 3000))
+        self.assertEqual(result, (1920, 1080, 62.5, True, 3000, 30.0))
         self.assertEqual(
             run.call_args.kwargs["encoding"],
             "utf-8",
@@ -268,6 +268,46 @@ class SubtitleBurnTests(unittest.TestCase):
             run.call_args.kwargs["errors"],
             "replace",
         )
+
+    def test_ffmpeg_progress_falls_back_to_frames_when_time_is_na(self):
+        values = {
+            "frame": "900",
+            "out_time_us": "N/A",
+            "out_time_ms": "N/A",
+            "out_time": "N/A",
+        }
+
+        self.assertEqual(server._ffmpeg_progress_seconds(values, 30.0), 30.0)
+
+    def test_burn_process_persists_frame_based_progress_when_time_is_na(self):
+        class ProgressProcess:
+            stdout = iter([
+                "frame=900\n",
+                "out_time_us=N/A\n",
+                "out_time_ms=N/A\n",
+                "out_time=N/A\n",
+                "progress=continue\n",
+            ])
+            returncode = 0
+
+            def wait(self):
+                return 0
+
+        job = {"status": "downloading", "progress": server.empty_progress()}
+        with mock.patch.object(server.subprocess, "Popen", return_value=ProgressProcess()), \
+             mock.patch.object(server, "persist_job") as persist, \
+             mock.patch.object(server.time, "monotonic", side_effect=[10.0, 20.0]):
+            returncode, _lines = server._run_subtitle_burn_process(
+                "burn", job, ["ffmpeg"], 60.0, 30.0, "h264_nvenc", True
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(job["progress"]["percent"], 50.0)
+        self.assertEqual(job["progress"]["phase"], "burning_subtitles")
+        self.assertEqual(job["progress"]["encoder"], "h264_nvenc")
+        self.assertTrue(job["progress"]["hardware_accelerated"])
+        self.assertEqual(job["progress"]["eta_seconds"], 10.0)
+        self.assertGreaterEqual(persist.call_count, 2)
 
     def test_hdr_probe_recognizes_pq_and_keeps_sdr_unblocked(self):
         hdr = mock.Mock(stdout="", stderr="Video: hevc, yuv420p10le(tv, bt2020nc/bt2020/smpte2084)")
@@ -381,7 +421,9 @@ class SubtitleBurnTests(unittest.TestCase):
                 "progress": server.empty_progress(),
             }
 
-            def run_burn(_job_id, _job, command, _duration, _encoder, _hardware):
+            def run_burn(
+                _job_id, _job, command, _duration, _frame_rate, _encoder, _hardware
+            ):
                 commands.append(command)
                 if len(commands) == 1:
                     return 1, ["hardware failure"]
@@ -393,7 +435,7 @@ class SubtitleBurnTests(unittest.TestCase):
                  mock.patch.object(
                      server,
                      "probe_video_for_burn",
-                     return_value=(1920, 1080, 10.0, False, 3000),
+                     return_value=(1920, 1080, 10.0, False, 3000, 30.0),
                  ), \
                  mock.patch.object(server, "convert_subtitle_to_ass"), \
                  mock.patch.object(
