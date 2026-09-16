@@ -33,3 +33,35 @@ for (const status of ['error','cancelled']) {
   assert(!markup.includes('data-task-action="retry"'));
 }
 console.log('OK edited retries and honest quality summaries');
+for (const status of ['done','error','cancelled','missing']) {
+  const markup = context.rowActions({status,key:'job:past',task:{id:'past',status}});
+  assert(markup.includes('data-task-action="delete"'), `${status} history needs a visible remove action`);
+  assert(markup.includes('保留文件'));
+}
+const activeMarkup = context.rowActions({status:'downloading',key:'job:live',task:{id:'live'}});
+assert(!activeMarkup.includes('data-task-action="delete"'));
+
+(async () => {
+  const appSource = fs.readFileSync(require('node:path').join(__dirname, '../app/static/app.js'), 'utf8');
+  const card = {jobId:'past',status:'done'};
+  const other = {jobId:'live',status:'downloading'};
+  let ok = false, refreshed = 0, stopped = 0;
+  const harness = {
+    cardData:[card,other],
+    fetch:async (url, options) => {
+      assert.equal(url,'/api/jobs/past'); assert.equal(options.method,'DELETE');
+      return {ok,json:async()=>ok ? {} : {error:'Cannot delete'}};
+    },
+    stopCardPolling:()=>stopped++, refreshTaskCenter:async()=>refreshed++,
+    friendlyError:String, setSettingsMsg:()=>{}, window:{mediaWorkspace:{message:()=>{}}},
+  };
+  vm.createContext(harness);
+  vm.runInContext(appSource.slice(appSource.indexOf('async function taskAction'),appSource.indexOf('function taskButtons')),harness);
+  await harness.taskAction('past','delete');
+  assert.equal(card.status,'done','Failed removal must preserve the card');
+  ok = true;
+  await harness.taskAction('past','delete');
+  assert.equal(card.dismissed,true); assert.equal(card.status,'dismissed');
+  assert.equal(other.status,'downloading'); assert.equal(stopped,1); assert.equal(refreshed,1);
+  console.log('OK history removal, failed deletion, and active task preservation');
+})().catch(error=>{console.error(error);process.exitCode=1;});

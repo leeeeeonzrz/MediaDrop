@@ -107,7 +107,9 @@
     if (activeStates.has(e.status) && !['queued','starting','interrupted'].includes(e.status) && e.task) action += `<button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="cancel">取消</button>`;
     if (attentionStates.has(e.status) && issueKind(e) === 'auth') action = `<button data-workspace="fix-login">检查登录</button>` + action;
     if (e.status === 'missing' && e.task) action = `<button data-workspace="locate-file" data-entry-key="${attr(e.key)}">重新定位文件</button>` + action;
-    return `<div class="row-actions">${action}${info}</div>`;
+    const remove = e.task && ['done','error','cancelled','missing'].includes(e.status)
+      ? `<button class="icon-btn" data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="delete" aria-label="移除记录，保留文件" title="移除记录，保留已下载文件">${uiIcon('trash')}</button>` : '';
+    return `<div class="row-actions">${action}${info}${remove}</div>`;
   }
   function syncSidebarAccessibility() {
     const narrow = matchMedia('(max-width:820px)').matches;
@@ -205,8 +207,7 @@
     if ($('jobDetails').innerHTML !== markup) $('jobDetails').innerHTML = markup;
   }
   async function removeEntry(entry) {
-    try { const res = await fetch(`/api/jobs/${encodeURIComponent(entry.task.id)}`, {method:'DELETE'}); const data = await res.json(); if (!res.ok) throw new Error(data.error || '无法移除记录'); entry.card.dismissed = true; entry.card.status = 'dismissed'; await refreshTaskCenter(); }
-    catch (error) { message(friendlyError(error.message)); }
+    if (entry?.task) await taskAction(entry.task.id, 'delete');
   }
   function choose(key) { selected = key; render(); }
   function setFilter(value) { filter = value; document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === filter))); $('libraryTitle').textContent = {all:'全部任务',active:'进行中',done:'已完成',attention:'需要处理'}[filter]; render(); }

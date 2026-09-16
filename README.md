@@ -23,15 +23,15 @@ MediaDrop 是一款面向 macOS 和 Windows 的视频、音频下载工具。支
 
 ## 下载与安装
 
-当前版本：**[V1.2.0](https://github.com/henry1786580051-lang/MediaDrop/releases/tag/V1.2.0)**。
+当前版本：**[V1.2.1](https://github.com/henry1786580051-lang/MediaDrop/releases/tag/V1.2.1)**。
 
 | 平台 | 适用设备 | 安装包 |
 | --- | --- | --- |
-| macOS | Apple Silicon（M1 及以后），macOS 12+ | [下载 DMG](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.0/MediaDrop-1.2.0-macOS-arm64.dmg) |
-| Windows x64 | 常见的 Intel / AMD 64 位电脑 | [下载 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.0/MediaDrop.Setup.1.2.0.exe) |
-| Windows ARM64 | ARM 电脑，需支持运行 x64 辅助进程 | [下载 ARM64 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.0/MediaDrop.Setup.1.2.0.arm64.exe) |
+| macOS | Apple Silicon（M1 及以后），macOS 12+ | [下载 DMG](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.1/MediaDrop-1.2.1-macOS-arm64.dmg) |
+| Windows x64 | 常见的 Intel / AMD 64 位电脑 | [下载 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.1/MediaDrop.Setup.1.2.1.exe) |
+| Windows ARM64 | ARM 电脑，需支持运行 x64 辅助进程 | [下载 ARM64 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.1/MediaDrop.Setup.1.2.1.arm64.exe) |
 
-[SHA-256 校验清单](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.0/SHA256SUMS-V1.2.0.txt) · [历史版本](https://github.com/henry1786580051-lang/MediaDrop/releases)
+[SHA-256 校验清单](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.1/SHA256SUMS-V1.2.1.txt) · [历史版本](https://github.com/henry1786580051-lang/MediaDrop/releases)
 
 **macOS：**打开 DMG，将 MediaDrop 拖入「应用程序」。当前不提供 Intel Mac 安装包。原生 Liquid Glass 需要 macOS 26；旧系统及减少透明度、高对比度环境使用实色界面。
 
@@ -155,7 +155,7 @@ npm run dist:mac
 
 macOS 打包需要 Xcode 的 macOS 26 SDK 来构建原生玻璃组件；安装包在临时目录完成签名和校验后复制到 `dist/`。Windows x64 与 ARM64 由 [GitHub Actions](.github/workflows/build.yml) 构建，并检查下载工具、原生图像组件与令牌服务启动。
 
-V1.2.0 通过 103 项后端测试及前端、桌面集成测试。完整发布记录见 [更新日志](CHANGELOG.md)。
+V1.2.1 通过 108 项后端测试及前端、桌面集成测试。完整发布记录见 [更新日志](CHANGELOG.md)。
 
 </details>
 

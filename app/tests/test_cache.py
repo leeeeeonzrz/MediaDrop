@@ -143,6 +143,57 @@ class ProgressEstimatorTests(unittest.TestCase):
         self.assertAlmostEqual(result["percent"], 10100 / 110, delta=0.1)
         self.assertEqual(result["state"], "estimating")
 
+    def test_current_speed_follows_slowdown_within_four_seconds(self):
+        total = 1000 * self.MIB
+        downloaded = 0
+        self.update(0, total=total)
+        for _ in range(20):
+            self.clock.advance(1)
+            downloaded += 20 * self.MIB
+            self.update(downloaded, total=total)
+        for _ in range(4):
+            self.clock.advance(1)
+            downloaded += self.MIB
+            result = self.update(downloaded, total=total)
+        self.assertAlmostEqual(result["speed_bps"], self.MIB, delta=1)
+
+    def test_polling_ages_speed_without_new_progress(self):
+        self.update(0, total=100 * self.MIB)
+        for second in range(1, 9):
+            self.clock.advance(1)
+            self.update(second * 10 * self.MIB, total=100 * self.MIB)
+        self.clock.advance(2)
+        self.assertEqual(self.estimator.snapshot()["speed_bps"], 5 * self.MIB)
+        self.clock.advance(2)
+        self.assertIsNone(self.estimator.snapshot()["speed_bps"])
+
+    def test_pause_resume_and_new_stream_discard_previous_speed(self):
+        self.update(0, total=100 * self.MIB)
+        self.clock.advance(2)
+        self.update(40 * self.MIB, total=100 * self.MIB)
+        self.assertIsNone(self.estimator.pause()["speed_bps"])
+        self.clock.advance(60)
+        self.assertIsNone(self.estimator.resume()["speed_bps"])
+        self.clock.advance(2)
+        self.update(80 * self.MIB, total=100 * self.MIB)
+        self.clock.advance(1)
+        result = self.update(self.MIB, total=10 * self.MIB)
+        self.assertIsNone(result["speed_bps"])
+        self.assertIsNone(self.estimator.smoothed_speed)
+
+    def test_existing_resume_bytes_are_not_counted_as_transfer(self):
+        self.update(800 * self.MIB, total=1000 * self.MIB)
+        self.clock.advance(2)
+        result = self.update(802 * self.MIB, total=1000 * self.MIB)
+        self.assertEqual(result["speed_bps"], self.MIB)
+
+    def test_irregular_callbacks_interpolate_window_boundary(self):
+        self.update(0, total=100 * self.MIB)
+        for elapsed in (1.5, 2, 3):
+            self.clock.advance(elapsed)
+            result = self.update(int(self.clock.value * 2 * self.MIB), total=100 * self.MIB)
+        self.assertAlmostEqual(result["speed_bps"], 2 * self.MIB, delta=1)
+
     def test_unknown_total_does_not_invent_an_eta(self):
         self.update(0)
         for second in range(1, 10):

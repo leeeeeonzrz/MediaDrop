@@ -1110,6 +1110,16 @@ async function taskAction(id, action, extra = {}) {
     const response = await fetch(url, options);
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || '任务操作失败');
+    if (action === 'delete') {
+      // A completed download can still have a live renderer card. Dismiss it
+      // only after deletion succeeds, or it reappears as an orphaned task.
+      for (const card of cardData) {
+        if (card.jobId !== id) continue;
+        stopCardPolling(card);
+        card.dismissed = true;
+        card.status = 'dismissed';
+      }
+    }
     await refreshTaskCenter();
   } catch (error) {
     window.mediaWorkspace?.message(friendlyError(error.message));
@@ -1123,8 +1133,8 @@ function taskButtons(task) {
   if (task.status === 'starting' || task.status === 'interrupted') return button('cancel', '取消下载', 'close');
   if (task.status === 'queued') return button('reorder', '上移', 'up', 'data-direction="up"') + button('reorder', '下移', 'down', 'data-direction="down"') + button('cancel', '取消下载', 'close');
   if (task.status === 'downloading' || task.status === 'paused') return button('pause', task.status === 'paused' ? '继续下载' : '暂停下载', task.status === 'paused' ? 'play' : 'pause') + button('cancel', '取消下载', 'close');
-  if (task.status === 'done') return `<button title="在 Finder 中显示" aria-label="在 Finder 中显示" data-click-action="reveal-task-file" data-file-path="${attr(task.file || '')}">${uiIcon('folder')}</button>` + button('retry', '重新下载', 'retry') + button('delete', '移除记录', 'close');
-  return button('retry', '重试下载', 'retry') + button('delete', '移除记录', 'close');
+  if (task.status === 'done') return `<button title="在 Finder 中显示" aria-label="在 Finder 中显示" data-click-action="reveal-task-file" data-file-path="${attr(task.file || '')}">${uiIcon('folder')}</button>` + button('retry', '重新下载', 'retry') + button('delete', '移除记录，保留文件', 'trash');
+  return button('retry', '重试下载', 'retry') + button('delete', '移除记录，保留文件', 'trash');
 }
 
 async function revealTaskFile(filePath) {

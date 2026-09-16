@@ -716,6 +716,7 @@ class DownloadProgressEstimator:
     brief bursts do not make the remaining time jump around.
     """
 
+    SPEED_WINDOW_SECONDS = 4.0
     WINDOW_SECONDS = 30.0
     WARMUP_SECONDS = 4.0
     STALL_SECONDS = 8.0
@@ -750,6 +751,7 @@ class DownloadProgressEstimator:
     def _begin_sampling_period(self, now, cumulative_downloaded):
         self.samples.clear()
         self.rate_history.clear()
+        self.smoothed_speed = None
         self.samples.append((now, cumulative_downloaded))
         self.phase_started_at = now
         self.last_sample_at = now
@@ -815,6 +817,32 @@ class DownloadProgressEstimator:
         self.smoothed_speed += alpha * (robust_rate - self.smoothed_speed)
         self.last_speed_at = now
 
+    def _current_speed(self, now):
+        """Recent bytes per second; polling ages the value even without new output.
+
+        ETA retains its long smoothing window, but the visible transfer rate must
+        not retain old bursts. Interpolate the boundary for irregular callbacks.
+        """
+        if self.paused or self.phase != "downloading" or len(self.samples) < 2:
+            return None
+        end_bytes = self.samples[-1][1]
+        cutoff = now - self.SPEED_WINDOW_SECONDS
+        anchor_time, anchor_bytes = self.samples[0]
+        if self.samples[-1][0] <= cutoff:
+            return None
+        for sample_time, sample_bytes in list(self.samples)[1:]:
+            if sample_time >= cutoff:
+                if anchor_time < cutoff:
+                    fraction = (cutoff - anchor_time) / (sample_time - anchor_time)
+                    anchor_bytes += fraction * (sample_bytes - anchor_bytes)
+                    anchor_time = cutoff
+                break
+            anchor_time, anchor_bytes = sample_time, sample_bytes
+        elapsed = now - anchor_time
+        if elapsed < 1.0:
+            return None
+        return max(0.0, end_bytes - anchor_bytes) / elapsed
+
     def _confidence(self, now):
         if self.phase_started_at is None:
             return "low"
@@ -852,7 +880,7 @@ class DownloadProgressEstimator:
             state = "downloading"
 
         eta = None if state != "downloading" else self.smoothed_eta
-        speed = None if self.phase != "downloading" else self.smoothed_speed
+        speed = self._current_speed(now)
         return {
             "percent": percent,
             "speed": _format_speed(speed),
@@ -889,6 +917,7 @@ class DownloadProgressEstimator:
                 self.phase_total_is_estimate = True
 
             self.phase = "downloading"
+            downloaded = max(self.last_phase_downloaded, downloaded)
             cumulative_downloaded = self.completed_downloaded + downloaded
             if self.phase_started_at is None:
                 self._begin_sampling_period(now, cumulative_downloaded)
