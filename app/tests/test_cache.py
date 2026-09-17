@@ -194,6 +194,61 @@ class ProgressEstimatorTests(unittest.TestCase):
             result = self.update(int(self.clock.value * 2 * self.MIB), total=100 * self.MIB)
         self.assertAlmostEqual(result["speed_bps"], 2 * self.MIB, delta=1)
 
+    def stream(self, name, downloaded, total=None, **extra):
+        return self.estimator.update(dict(filename=name, downloaded_bytes=downloaded,
+                                          total_bytes=total, **extra))
+
+    def test_interleaved_sabr_streams_are_counted_once(self):
+        for second in range(100):
+            self.clock.advance(1)
+            self.stream('video.f401.mp4', (100 + second) * self.MIB, 1000 * self.MIB)
+            self.clock.advance(1)
+            result = self.stream('audio.f251.mp4', (1 + second) * self.MIB, 110 * self.MIB)
+        self.assertEqual(result['phase_index'], 2)
+        self.assertEqual(result['downloaded'], 299 * self.MIB)
+        self.assertEqual(result['total'], 1110 * self.MIB)
+        self.assertAlmostEqual(result['speed_bps'], self.MIB, delta=1)
+        self.assertAlmostEqual(result['eta_seconds'], 811, delta=10)
+
+    def test_late_resumed_stream_does_not_inflate_speed(self):
+        self.stream('video', 100 * self.MIB, 1000 * self.MIB)
+        for i in range(1, 6):
+            self.clock.advance(1)
+            self.stream('video', (100 + i) * self.MIB, 1000 * self.MIB)
+        result = self.stream('audio', 500 * self.MIB, 600 * self.MIB)
+        self.assertEqual(result['downloaded'], 605 * self.MIB)
+        self.assertAlmostEqual(result['speed_bps'], self.MIB, delta=1)
+        self.assertEqual(result['total'], 1600 * self.MIB)
+
+    def test_same_stream_counter_regression_does_not_create_phase(self):
+        self.stream('video', 100 * self.MIB, 1000 * self.MIB)
+        self.clock.advance(1)
+        result = self.stream('video', 50 * self.MIB, 1000 * self.MIB)
+        self.assertEqual(result['phase_index'], 1)
+        self.assertEqual(result['downloaded'], 100 * self.MIB)
+        self.assertEqual(result['total'], 1000 * self.MIB)
+
+    def test_stream_totals_keep_exact_sizes_and_wait_for_unknown(self):
+        self.stream('video', self.MIB, 100 * self.MIB)
+        result = self.stream('audio', self.MIB)
+        self.assertEqual(result['total'], 0)
+        self.assertIsNone(result['eta_seconds'])
+        self.stream('audio', 2 * self.MIB, 10 * self.MIB)
+        result = self.stream('video', 2 * self.MIB, total_bytes_estimate=9999 * self.MIB)
+        self.assertEqual(result['total'], 110 * self.MIB)
+        self.assertFalse(result['total_is_estimate'])
+        result = self.stream('audio', 3 * self.MIB, status='finished')
+        self.assertEqual(result['total'], 103 * self.MIB)
+
+    def test_progress_index_zero_is_a_valid_stream_identity(self):
+        self.estimator.update(dict(progress_idx=0, downloaded_bytes=100, total_bytes=1000))
+        result = self.estimator.update(dict(progress_idx=1, downloaded_bytes=10, total_bytes=100))
+        self.assertEqual(result['downloaded'], 110)
+        self.assertEqual(result['total'], 1100)
+        result = self.estimator.update(dict(downloaded_bytes=999999, total_bytes_estimate=9999999))
+        self.assertEqual(result['downloaded'], 110)
+        self.assertEqual(result['total'], 1100)
+
     def test_unknown_total_does_not_invent_an_eta(self):
         self.update(0)
         for second in range(1, 10):
@@ -610,11 +665,15 @@ class CacheLifecycleTests(unittest.TestCase):
                 partial = pathlib.Path(template.replace("%(ext)s", "mp4.part"))
                 with partial.open("wb") as handle:
                     handle.truncate(10 * 1024 * 1024)
-                return Process(["ERROR: connection reset by peer"], 1)
+                return Process([server.PROGRESS_PREFIX + json.dumps({
+                    "filename": "video.mp4", "downloaded_bytes": 10 * 1024 * 1024,
+                    "total_bytes": 20 * 1024 * 1024}), "ERROR: connection reset by peer"], 1)
             completed = pathlib.Path(template.replace("%(ext)s", "mp4"))
             with completed.open("wb") as handle:
                 handle.truncate(11 * 1024 * 1024)
-            return Process([], 0)
+            return Process([server.PROGRESS_PREFIX + json.dumps({
+                "filename": "video.mp4", "downloaded_bytes": 1024 * 1024,
+                "total_bytes": 11 * 1024 * 1024})], 0)
 
         server.jobs["ten-mib"] = {"status": "starting", "progress": server.empty_progress()}
         server.active_downloads.add("ten-mib")
@@ -641,6 +700,8 @@ class CacheLifecycleTests(unittest.TestCase):
 
         job = server.jobs["ten-mib"]
         self.assertEqual(attempts, 2)
+        self.assertEqual(job["estimator"].snapshot()["downloaded"], 1024 * 1024)
+        self.assertEqual(job["estimator"].snapshot()["total"], 11 * 1024 * 1024)
         self.assertEqual(job["status"], "done")
         self.assertEqual(os.path.getsize(job["file"]), 11 * 1024 * 1024)
         self.assertEqual(os.listdir(server.get_cache_root()), [])

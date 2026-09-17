@@ -725,6 +725,7 @@ class DownloadProgressEstimator:
     def __init__(self, clock=None):
         self.clock = clock or time.monotonic
         self.lock = threading.RLock()
+        self.streams = {}
         self.samples = deque()
         self.rate_history = deque()
         self.phase_started_at = None
@@ -896,6 +897,49 @@ class DownloadProgressEstimator:
             "state": state,
         }
 
+    @staticmethod
+    def _stream_key(progress):
+        # SABR interleaves independent writers; a smaller counter is not a new
+        # phase. Standard yt-dlp also supplies the destination filename.
+        for field in ("filename", "progress_idx", "_progress_type"):
+            value = progress.get(field)
+            if value is not None and value != "":
+                return (field, str(value))
+        return None
+
+    def _update_stream(self, key, progress, downloaded, exact_total, estimated_total, now):
+        stream = self.streams.get(key)
+        if stream is None:
+            stream = {"downloaded": downloaded, "total": 0, "estimated": False,
+                      "estimates": deque(maxlen=9)}
+            self.streams[key] = stream
+            # The first callback can include gigabytes already on disk. Shift
+            # the sampling baseline without treating those bytes as traffic.
+            self.samples = deque((t, b + downloaded) for t, b in self.samples)
+            self.smoothed_eta = None
+        stream["downloaded"] = max(stream["downloaded"], downloaded)
+        if exact_total:
+            stream["total"] = max(stream["downloaded"], exact_total)
+            stream["estimated"] = False
+            stream["estimates"].clear()
+        elif estimated_total and (not stream["total"] or stream["estimated"]):
+            stream["estimates"].append(estimated_total)
+            stream["total"] = max(stream["downloaded"], int(statistics.median(stream["estimates"])))
+            stream["estimated"] = True
+        if progress.get("status") == "finished":
+            stream["total"] = stream["downloaded"]
+            stream["estimated"] = False
+        elif stream["total"]:
+            stream["total"] = max(stream["total"], stream["downloaded"])
+        self.completed_downloaded = self.completed_total = 0
+        self.completed_total_is_estimate = False
+        self.phase_index = len(self.streams)
+        self.last_phase_downloaded = sum(s["downloaded"] for s in self.streams.values())
+        self.phase_total = (sum(s["total"] for s in self.streams.values())
+                            if all(s["total"] for s in self.streams.values()) else 0)
+        self.phase_total_is_estimate = any(s["estimated"] for s in self.streams.values())
+        return self.last_phase_downloaded
+
     def update(self, progress, now=None):
         with self.lock:
             now = self._now(now)
@@ -903,18 +947,26 @@ class DownloadProgressEstimator:
             exact_total = int(_positive_number(progress.get("total_bytes")))
             estimated_total = int(_positive_number(progress.get("total_bytes_estimate")))
 
-            reset_threshold = max(1024 * 1024, self.last_phase_downloaded * 0.05)
-            if downloaded + reset_threshold < self.last_phase_downloaded:
-                self._start_next_phase(now, downloaded)
+            key = self._stream_key(progress)
+            if key is not None:
+                downloaded = self._update_stream(
+                    key, progress, downloaded, exact_total, estimated_total, now)
+            elif self.streams:
+                # Rounded legacy text cannot safely be mixed with per-file bytes.
+                return self._snapshot(now)
+            else:
+                reset_threshold = max(1024 * 1024, self.last_phase_downloaded * 0.05)
+                if downloaded + reset_threshold < self.last_phase_downloaded:
+                    self._start_next_phase(now, downloaded)
 
-            if exact_total:
-                self.phase_total = max(downloaded, exact_total)
-                self.phase_total_is_estimate = False
-                self.total_estimates.clear()
-            elif estimated_total:
-                self.total_estimates.append(estimated_total)
-                self.phase_total = max(downloaded, int(statistics.median(self.total_estimates)))
-                self.phase_total_is_estimate = True
+                if exact_total:
+                    self.phase_total = max(downloaded, exact_total)
+                    self.phase_total_is_estimate = False
+                    self.total_estimates.clear()
+                elif estimated_total:
+                    self.total_estimates.append(estimated_total)
+                    self.phase_total = max(downloaded, int(statistics.median(self.total_estimates)))
+                    self.phase_total_is_estimate = True
 
             self.phase = "downloading"
             downloaded = max(self.last_phase_downloaded, downloaded)
@@ -923,7 +975,7 @@ class DownloadProgressEstimator:
                 self._begin_sampling_period(now, cumulative_downloaded)
             else:
                 self._update_speed(now, cumulative_downloaded)
-            self.last_phase_downloaded = max(self.last_phase_downloaded, downloaded)
+            self.last_phase_downloaded = downloaded
 
             remaining = max(0, self.completed_total + self.phase_total - cumulative_downloaded)
             confidence = self._confidence(now)
@@ -1804,6 +1856,13 @@ def run_download(
         attempt_cmd = list(cmd)
         for attempt in range(1, DOWNLOAD_PROCESS_ATTEMPTS + 1):
             ensure_download_active(job)
+            if attempt > 1:
+                # A restarted process may resume or truncate its partial files.
+                # Rebaseline its first counters instead of reusing old totals.
+                estimator = DownloadProgressEstimator()
+                with jobs_lock:
+                    job["estimator"] = estimator
+                    job["progress"] = empty_progress()
             job["attempts"] = attempt
             returncode, diagnostic_lines = run_ytdlp_download_process(
                 job_id, job, attempt_cmd, estimator
