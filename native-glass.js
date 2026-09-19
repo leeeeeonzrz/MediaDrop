@@ -12,6 +12,17 @@ function load(app) {
 }
 function windowOptions(app) { return load(app) ? { transparent: true, backgroundColor: '#00000000' } : {}; }
 function install({ app, ipcMain, BrowserWindow, nativeTheme }) {
+  // BrowserWindow activity is distinct from focus moving into an embedded
+  // native WebKit control; DOM blur alone would incorrectly dim the window.
+  app.on?.('browser-window-created', (_event, win) => {
+    const publish = () => { if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('window-activity', win.isFocused()); };
+    win.on('focus', publish); win.on('blur', publish);
+  });
+  ipcMain.handle('window-activity', event => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return Boolean(win && !win.isDestroyed() && event.senderFrame === event.sender.mainFrame && win.isFocused());
+  });
+  require('./glass-inspector').installInspector({ app, ipcMain, BrowserWindow, nativeTheme }, load);
   ipcMain.handle('native-glass', (event, appearance) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed() || event.senderFrame !== event.sender.mainFrame) return false;

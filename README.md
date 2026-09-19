@@ -23,15 +23,15 @@ MediaDrop 是一款面向 macOS 和 Windows 的视频、音频下载工具。支
 
 ## 下载与安装
 
-当前版本：**[V1.2.2](https://github.com/henry1786580051-lang/MediaDrop/releases/tag/V1.2.2)**。
+当前版本：**[V1.3.0](https://github.com/henry1786580051-lang/MediaDrop/releases/tag/V1.3.0)**。
 
 | 平台 | 适用设备 | 安装包 |
 | --- | --- | --- |
-| macOS | Apple Silicon（M1 及以后），macOS 12+ | [下载 DMG](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.2/MediaDrop-1.2.2-macOS-arm64.dmg) |
-| Windows x64 | 常见的 Intel / AMD 64 位电脑 | [下载 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.2/MediaDrop.Setup.1.2.2.exe) |
-| Windows ARM64 | ARM 电脑，需支持运行 x64 辅助进程 | [下载 ARM64 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.2/MediaDrop.Setup.1.2.2.arm64.exe) |
+| macOS | Apple Silicon（M1 及以后），macOS 12+ | [下载 DMG](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.3.0/MediaDrop-1.3.0-macOS-arm64.dmg) |
+| Windows x64 | 常见的 Intel / AMD 64 位电脑 | [下载 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.3.0/MediaDrop.Setup.1.3.0.exe) |
+| Windows ARM64 | ARM 电脑，需支持运行 x64 辅助进程 | [下载 ARM64 EXE](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.3.0/MediaDrop.Setup.1.3.0.arm64.exe) |
 
-[SHA-256 校验清单](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.2.2/SHA256SUMS-V1.2.2.txt) · [历史版本](https://github.com/henry1786580051-lang/MediaDrop/releases)
+[SHA-256 校验清单](https://github.com/henry1786580051-lang/MediaDrop/releases/download/V1.3.0/SHA256SUMS-V1.3.0.txt) · [历史版本](https://github.com/henry1786580051-lang/MediaDrop/releases)
 
 **macOS：**打开 DMG，将 MediaDrop 拖入「应用程序」。当前不提供 Intel Mac 安装包。原生 Liquid Glass 需要 macOS 26；旧系统及减少透明度、高对比度环境使用实色界面。
 
@@ -40,7 +40,7 @@ MediaDrop 是一款面向 macOS 和 Windows 的视频、音频下载工具。支
 <details>
 <summary>首次打开时的系统安全提示</summary>
 
-macOS 安装包使用 ad-hoc 签名，未进行 Apple 公证；Windows 安装包未进行商业代码签名，因此系统可能显示来源或信誉提示。请确认安装包来自本仓库 Release，并按需核对 SHA-256。
+macOS 安装包使用固定 Apple Development 证书签名，未进行 Apple 公证；Windows 安装包未进行商业代码签名，因此系统可能显示来源或信誉提示。请确认安装包来自本仓库 Release，并按需核对 SHA-256。
 
 macOS 如阻止打开，可在确认来源后前往「系统设置 → 隐私与安全性」，查看应用对应的「仍要打开」选项。
 
@@ -155,7 +155,7 @@ npm run dist:mac
 
 macOS 打包需要 Xcode 的 macOS 26 SDK 来构建原生玻璃组件；安装包在临时目录完成签名和校验后复制到 `dist/`。Windows x64 与 ARM64 由 [GitHub Actions](.github/workflows/build.yml) 构建，并检查下载工具、原生图像组件与令牌服务启动。
 
-V1.2.2 通过 113 项后端测试及前端、桌面集成测试。完整发布记录见 [更新日志](CHANGELOG.md)。
+V1.3.0 通过 120 项后端测试及前端、桌面集成测试。完整发布记录见 [更新日志](CHANGELOG.md)。
 
 </details>
 
@@ -183,3 +183,28 @@ MediaDrop/
 本项目基于 [reclip](https://github.com/averygan/reclip) 开发，使用 [yt-dlp](https://github.com/yt-dlp/yt-dlp)、[FFmpeg](https://ffmpeg.org/)、[Electron](https://www.electronjs.org/) 与 [Flask](https://flask.palletsprojects.com/)。YouTube 增强模式使用 [SABR 引擎分支](https://github.com/bashonly/yt-dlp/releases/tag/sabr) 和 [bgutil PO Token Provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)。
 
 仓库代码采用 [MIT License](LICENSE)；随包组件遵循各自许可证。请仅下载你拥有权利或已获授权保存的内容。
+
+### 本地 macOS 签名与浏览器权限
+
+macOS 会将浏览器数据授权绑定到应用的代码签名身份。临时签名的身份随构建变化，更新后可能出现权限开关无法保留；首次授权引导不能替代稳定签名。
+
+本地开发可在 Git 忽略的 `build/local-signing.json` 中设置 `{"identity":"证书指纹或名称"}`，或使用环境变量 `MEDIADROP_SIGNING_IDENTITY`。配置证书后签名失败会终止构建，不会静默退回临时签名。Apple Development 适合本机开发验证；面向用户的正式 macOS 分发应使用 Developer ID Application 并完成公证。本地证书配置不会上传仓库或自动提供给 GitHub Actions。
+
+从临时签名切换到证书签名时，旧授权可能需要针对 MediaDrop 重新建立。不要反复重置全部系统权限，也不要直接修改系统权限数据库。
+
+
+### 原生 Liquid Glass 详情面板
+
+macOS 26 及以上使用 Clear 样式的 `NSGlassEffectView` 承载透明 WebKit 详情内容，边缘折射、高光与背景采样由 AppKit 渲染。窗口底层使用标准 AppKit 背景材质，避免整窗与详情重复叠加 Liquid Glass。宽度超过 1180 个逻辑像素时为详情预留独立列；窄窗口使用带背景扩散的浮层，避免透出可辨认的底层文字。内部仅使用轻薄填充，弹出菜单保持实色以确保可读。任务状态与下载操作仍由主界面统一管理。窗口缩放、侧栏动画及外观变化会同步到原生视图；减少透明度、增强对比度、原生组件不可用时回退到普通面板。
+
+WebKit 在 macOS 上仍需要受保护的 `drawsBackground` 兼容开关来关闭不透明页面底色；该开关失效时不会启用玻璃面板。此兼容点应在升级 macOS 时复测；如需提交 Mac App Store，还需评估并替换这一非公开 WebKit 开关。编译原生模块时可通过 `SDKROOT` 指定与本机工具链匹配的 macOS SDK。
+
+导航材质采用分层设计：固定导航与设置窗口使用跟随窗口激活状态的 AppKit 标准材质；窄窗口浮出侧栏、顶部操作组使用独立的 Regular Liquid Glass。各表面独立同步控件状态，无法启用原生材质时保留普通界面。任务“更多操作”使用系统菜单，选择后仍交由原任务逻辑执行；菜单打开期间任务发生变化时不执行过期操作。下载列表、输入框与设置表单保留清晰底色。
+
+
+### macOS 发布签名连续性
+
+macOS 发布构建必须使用固定签名证书，不再自动降级为 ad-hoc 签名。本机可在不入库的 `build/local-signing.json` 中配置 `identity` 和可选 `requirement`。
+GitHub Actions 的 macOS 构建需配置仓库 Secrets：`MACOS_CERTIFICATE_BASE64`（现有证书及私钥的加密 p12）、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY` 和 `MACOS_SIGNING_REQUIREMENT`（现有应用的 designated requirement 表达式，不含 `designated =>` 前缀）。只在受信任的仓库中配置这些凭据；不得提交到 Git。构建在临时钥匙串中签名并验证身份，最后删除钥匙串；缺少凭据或身份不匹配时终止发布。Windows 构建不依赖这些凭据。
+
+元数据解析请求可携带独立的 `request_id`，通过 `POST /api/info/<request_id>/cancel` 终止对应解析进程。客户端等待取消确认后结束本批次；旧客户端不带 ID 的解析接口保持兼容。

@@ -91,25 +91,41 @@
     }
     return { video: '视频', audio: '音频', image: '封面' }[t?.format || c?.format] || '媒体';
   }
+  function primaryAction(e) {
+    const key = attr(e.key);
+    if (e.status === 'missing') return `<button data-workspace="locate-file" data-entry-key="${key}">定位文件</button>`;
+    if (attentionStates.has(e.status) && issueKind(e) === 'auth') return '<button data-workspace="fix-login">检查登录</button>';
+    if (e.status === 'done') return `<button data-workspace="row-open" data-entry-key="${key}">打开文件</button>`;
+    if (e.status === 'info-error') return `<button data-workspace="row-reparse" data-entry-key="${key}">重新解析</button>`;
+    if (['ready','error','cancelled'].includes(e.status) && e.card) return `<button data-click-action="download-card" data-index="${e.index}">${e.status === 'ready' ? '下载' : '重试'}</button>`;
+    if (e.task && e.status !== 'cancelling') {
+      const verb = ['downloading','paused'].includes(e.status) ? 'pause' : ['starting','queued','interrupted'].includes(e.status) ? 'cancel' : 'retry';
+      return `<button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="${verb}">${verb === 'pause' ? (e.status === 'paused' ? '继续下载' : '暂停') : verb === 'cancel' ? '取消下载' : '重试'}</button>`;
+    }
+    return '';
+  }
+  function secondaryActions(e) {
+    let actions = '';
+    if (e.status === 'queued' && e.task) actions += `<button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="reorder" data-direction="up">在队列中上移</button><button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="reorder" data-direction="down">在队列中下移</button>`;
+    if (e.status === 'done' && e.task?.file) actions += `<button data-workspace="row-preview" data-entry-key="${attr(e.key)}">快速查看 <kbd>空格</kbd></button><button data-click-action="reveal-task-file" data-file-path="${attr(e.task.file)}">在 Finder 中显示</button>`;
+    if (e.task && activeStates.has(e.status) && !['queued','starting','interrupted','cancelling'].includes(e.status)) actions += `<button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="cancel">取消下载</button>`;
+    if (['done','missing'].includes(e.status)) actions += alternateDownloadActions(e);
+    if (!activeStates.has(e.status) && e.status !== 'loading') {
+      if (e.card?.url || e.task?.url) actions += `<button data-workspace="row-reparse" data-entry-key="${attr(e.key)}">重新解析链接</button>`;
+      if (e.task && ['done','missing'].includes(e.status)) actions += `<button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="retry">重新下载</button>`;
+      if (e.task) actions += `<hr><button class="destructive" data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="delete">移除记录，保留文件</button>`;
+      else actions += `<hr><button class="destructive" data-workspace="remove-entry" data-entry-key="${attr(e.key)}">移除任务</button>`;
+    }
+    return actions;
+  }
+  function moreButton(e, suffix) {
+    const actions = secondaryActions(e);
+    if (!actions) return '';
+    const id = 'actions-' + suffix + '-' + e.key.replace(/[^a-zA-Z0-9_-]/g, '-');
+    return `<button class="icon-btn more-button" popovertarget="${id}" aria-label="更多操作" title="更多操作">${uiIcon('more')}</button><div class="task-menu" id="${id}" popover>${actions}</div>`;
+  }
   function rowActions(e) {
-    const info = `<button class="icon-btn" data-workspace="row-info" data-entry-key="${attr(e.key)}" aria-label="任务信息" title="画质与更多选项">${uiIcon('inspector')}</button>`;
-    let action = '';
-    if (['ready','error','cancelled'].includes(e.status) && e.card) action = `<button class="primary-btn" data-click-action="download-card" data-index="${e.index}">${e.status === 'ready' ? '下载' : '重试'}</button>`;
-    else if (e.status === 'info-error') action = `<button data-workspace="row-reparse" data-entry-key="${attr(e.key)}">重新解析</button>`;
-    else if (e.task) {
-      if (e.status === 'done') action = `<button data-workspace="row-open" data-entry-key="${attr(e.key)}">打开</button><button data-click-action="reveal-task-file" data-file-path="${attr(e.task.file || '')}">在 Finder 中显示</button>`;
-      else {
-        const verb = ['downloading','paused'].includes(e.status) ? 'pause' : ['starting','queued','interrupted'].includes(e.status) ? 'cancel' : 'retry';
-        const label = verb === 'pause' ? (e.status === 'paused' ? '继续' : '暂停') : verb === 'cancel' ? '取消' : '重试';
-        action = `<button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="${verb}">${label}</button>`;
-      }
-    } else if (e.card?.jobId && ['downloading','paused'].includes(e.status)) action = `<button data-click-action="toggle-pause" data-index="${e.index}">${e.status === 'paused' ? '继续' : '暂停'}</button>`;
-    if (activeStates.has(e.status) && !['queued','starting','interrupted'].includes(e.status) && e.task) action += `<button data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="cancel">取消</button>`;
-    if (attentionStates.has(e.status) && issueKind(e) === 'auth') action = `<button data-workspace="fix-login">检查登录</button>` + action;
-    if (e.status === 'missing' && e.task) action = `<button data-workspace="locate-file" data-entry-key="${attr(e.key)}">重新定位文件</button>` + action;
-    const remove = e.task && ['done','error','cancelled','missing'].includes(e.status)
-      ? `<button class="icon-btn" data-click-action="task-action" data-job-id="${attr(e.task.id)}" data-task-action="delete" aria-label="移除记录，保留文件" title="移除记录，保留已下载文件">${uiIcon('trash')}</button>` : '';
-    return `<div class="row-actions">${action}${info}${remove}</div>`;
+    return `<div class="row-actions">${primaryAction(e)}${moreButton(e, 'row')}</div>`;
   }
   function syncSidebarAccessibility() {
     const narrow = matchMedia('(max-width:820px)').matches;
@@ -174,16 +190,18 @@
       if (actionData) [...$('mediaList').querySelectorAll('.row-actions button')].find(b => Object.entries(actionData).every(([key,value]) => b.dataset[key] === value))?.focus();
       if (focusedKey) [...$('mediaList').querySelectorAll('[data-entry]')].find(e => e.dataset.entry === focusedKey)?.focus();
     }
-    [...$('cards').children].forEach(el => { el.hidden = el.id !== selected?.replace('card:', 'card-'); });
     const entry = entries.find(e => e.key === selected);
+    const fileDetail = usesFileDetails(entry);
+    $('inspector').dataset.state = entry?.status || 'empty';
+    $('inspector').dataset.entryKey = entry?.key || '';
+    [...$('cards').children].forEach(el => { el.hidden = fileDetail || el.id !== selected?.replace('card:', 'card-'); });
     $('inspectorEmpty').hidden = Boolean(entry);
-    $('jobDetails').hidden = Boolean(entry?.card) || !entry;
-    if (entry && !entry.card) renderJobDetails(entry);
-    let fileActions = $('selectedFileActions');
-    if (!fileActions) { fileActions = document.createElement('div'); fileActions.id = 'selectedFileActions'; $('inspector').appendChild(fileActions); }
-    const fileMarkup = entry?.card && entry.task?.file ? `<div class="file-actions"><button class="secondary-btn" data-workspace="preview">快速查看</button><button class="secondary-btn" data-workspace="open-file">打开文件</button><button class="secondary-btn" data-click-action="reveal-task-file" data-file-path="${attr(entry.task.file)}">在 Finder 中显示</button><button class="secondary-btn" draggable="true" id="dragFile">拖到 Finder</button></div>` : '';
-    const extraMarkup = fileMarkup + (entry?.card && !activeStates.has(entry.status) && entry.status !== 'loading' ? `<div class="file-actions"><button class="secondary-btn" data-workspace="reparse">重新解析链接</button><button class="secondary-btn" data-workspace="remove-draft">移除${entry.task ? '记录' : '任务'}</button></div>` : '');
-    if (fileActions.innerHTML !== extraMarkup) fileActions.innerHTML = extraMarkup;
+    $('jobDetails').hidden = !fileDetail;
+    if (fileDetail) renderJobDetails(entry);
+    const footer = $('inspectorActions');
+    const footerMarkup = entry && entry.status !== 'loading' ? `<div class="inspector-action-row">${fileDetail || entry.status === 'ready' ? primaryAction(entry) : ''}${entry.status === 'done' && entry.task?.file ? `<button class="icon-btn" data-click-action="reveal-task-file" data-file-path="${attr(entry.task.file)}" aria-label="在 Finder 中显示" title="在 Finder 中显示">${uiIcon('folder')}</button>` : ''}${moreButton(entry, 'detail')}</div>` : '';
+    if (footer.innerHTML !== footerMarkup) footer.innerHTML = footerMarkup;
+    footer.hidden = !footerMarkup;
     if (entry?.card) {
       const card = $('card-' + entry.index);
       if (card && !card.querySelector('.quality-notice') && entry.card.formats?.length && /youtube\.com|youtu\.be/.test(entry.card.url)) {
@@ -198,19 +216,71 @@
     const running = entries.filter(e => activeStates.has(e.status));
     $('workspaceStatus').textContent = running.length ? `${running.length} 个任务进行中${running.some(e => e.status === 'paused') ? '（含已暂停）' : ''}` : `${entries.length} 个任务 · 准备就绪`;
   }
+  function alternateDownloadActions(e) {
+    if (!(e.card?.url || e.task?.url)) return '';
+    const current = e.task?.format || e.card?.format;
+    return [['audio','下载音频'],['image','下载封面']].filter(([format]) => format !== current)
+      .map(([format,label]) => `<button data-workspace="download-alternate" data-entry-key="${attr(e.key)}" data-format="${format}">${label}</button>`).join('');
+  }
+  function downloadAlternate(entry, format) {
+    if (!entry || !['audio','image'].includes(format)) return;
+    const c = entry.card, t = entry.task, url = c?.url || t?.url;
+    if (!url) return;
+    const existing = entries.find(e => (e.card?.url || e.task?.url) === url
+      && (e.task?.format || e.card?.format) === format && activeStates.has(e.status));
+    if (existing) { choose(existing.key); setFilter('all'); showInspector(true); return; }
+    // Create an independent task: never carry over job IDs, polling, or completed files.
+    const index = cardData.length;
+    cardData.push({url, status:'ready', format, title:c?.title || t?.title || '',
+      thumbnail:c?.thumbnail || t?.thumbnail || '', duration:c?.duration, uploader:c?.uploader || '',
+      formats:[], hasHdr:false, youtubeEngine:c?.youtubeEngine || t?.options?.youtube_engine,
+      skipBrowserCookies:Boolean(c?.skipBrowserCookies ?? t?.options?.skip_browser_cookies),
+      selectedFormatId:null, videoRangeMode:'auto', preset:'highest',
+      options:{container:'mp4', audio_quality:c?.options?.audio_quality || t?.options?.audio_quality || '192',
+        subtitle_languages:'zh.*,en.*'}, completedDownloads:{}});
+    renderCard(index); window.mediaWorkspace.selectCard(index); showInspector(true);
+    void dlCard(index);
+  }
+  function usesFileDetails(entry) {
+    return Boolean(entry?.task) && !(entry.card && ['error','cancelled'].includes(entry.status));
+  }
+  function resolveMenuAction(menuId, descriptor) {
+    if (!descriptor) return null;
+    const current = $(menuId);
+    return current && [...current.children].find(node => node.matches('button') && !node.disabled
+      && JSON.stringify(Object.fromEntries(Object.entries(node.dataset).filter(([key]) => key !== 'glassId').sort())) === descriptor);
+  }
+  function menuActionDescriptor(node) {
+    return node.matches('button') ? JSON.stringify(Object.fromEntries(Object.entries(node.dataset).filter(([key]) => key !== 'glassId').sort())) : null;
+  }
   function renderJobDetails(e) {
-    const t = e.task, info = t.media_info || {};
-    // Do not replace focused buttons while the background refreshes identical details.
-    const isVideo = (t.format || 'video') === 'video';
-    const range = info.dynamic_range || (activeStates.has(t.status) ? '完成后核验' : '未核验');
-    const markup = `<div class="detail-file-icon">${uiIcon(({audio:'audio',image:'image'})[t.format] || 'video')}</div><h3>${esc(e.title)}</h3><span class="detail-badge ${t.status === 'error' ? 'error' : ''}">${esc(labels[t.status] || t.status)}</span><dl><div><dt>类型</dt><dd>${esc(mediaDescription(e))}</dd></div>${isVideo ? `<div><dt>动态范围</dt><dd>${esc(range)}</dd></div>` : ''}${info.width ? `<div><dt>分辨率</dt><dd>${info.width} × ${info.height}</dd></div>` : ''}${info.codec ? `<div><dt>编码</dt><dd>${esc(info.codec.toUpperCase())}</dd></div>` : ''}${t.filename ? `<div><dt>文件名</dt><dd>${esc(t.filename)}</dd></div>` : ''}${t.file ? `<div><dt>位置</dt><dd>${esc(t.file)}</dd></div>` : ''}</dl>${t.error ? `<p class="card-error-msg">${esc(friendlyError(t.error))}</p>` : ''}<div class="task-actions">${taskButtons(t)}</div>${t.file ? `<div class="file-actions"><button class="secondary-btn" data-workspace="preview">快速查看</button><button class="secondary-btn" data-workspace="open-file">打开文件</button><button class="secondary-btn" draggable="true" id="dragFile">拖到 Finder</button></div>` : ''}<button class="secondary-btn" data-workspace="reparse">重新选择画质</button>`;
+    const t = e.task, info = t.media_info || {}, c = e.card;
+    const usable = t.status === 'done' && Boolean(t.file);
+    const thumb = safeMediaUrl(t.thumbnail || c?.thumbnail);
+    const preview = thumb ? `<img src="${attr(thumb)}" alt="">` : uiIcon(({audio:'audio',image:'image'})[t.format] || 'video');
+    const properties = [['类型', {video:'视频',audio:'音频',image:'封面'}[t.format] || '视频'],
+      ['格式', ['audio','image'].includes(t.format) ? (t.filename?.split('.').pop() || '').toUpperCase() : t.options?.container?.toUpperCase()],
+      ['分辨率', info.width && info.height ? `${info.width} × ${info.height}` : ''],
+      ['动态范围', t.format === 'video' ? info.dynamic_range || '完成后核验' : ''],
+      ['编码', info.codec?.toUpperCase()], ['音频质量', t.format === 'audio' && t.options?.audio_quality ? `${t.options.audio_quality} kbps` : ''], ['文件大小', t.file_size ? fmtSize(t.file_size) : ''],
+      ['文件名', t.filename], ['保存位置', t.file]];
+    const progress = t.progress || {};
+    const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, progress.percent)) : null;
+    const transfer = activeStates.has(t.status) ? `<section class="detail-transfer"><div><strong>${esc(progressPhaseLabel(progress.phase) || labels[t.status])}</strong><span>${percent === null ? '' : percent.toFixed(1) + '%'}</span></div><progress max="100"${percent === null ? '' : ` value="${percent}"`} aria-label="下载进度"></progress><p>${esc([fmtSize(progress.downloaded || 0), progress.total ? '/ ' + (progress.total_is_estimate ? '约 ' : '') + fmtSize(progress.total) : '', t.status === 'downloading' ? fmtSpeed(progress.speed_bps, progress.speed) : '', fmtEtaEstimate(progress, t.status === 'paused')].filter(Boolean).join(' · '))}</p></section>` : '';
+    const markup = `<div class="detail-identity">${usable ? `<button class="detail-preview ${thumb ? 'has-image' : ''}" data-workspace="preview" draggable="true" data-drag-file title="快速查看；也可拖到 Finder" aria-label="快速查看文件">${preview}</button>` : `<div class="detail-preview ${thumb ? 'has-image' : ''}">${preview}</div>`}<h3>${esc(e.title)}</h3>${c?.uploader || c?.duration ? `<p class="detail-byline">${esc([c.uploader, c.duration ? fmtDur(c.duration) : ''].filter(Boolean).join(' · '))}</p>` : ''}<span class="detail-status ${usable ? 'is-done' : attentionStates.has(t.status) ? 'is-issue' : ''}">${uiIcon(usable ? 'check' : attentionStates.has(t.status) ? 'warning' : 'download')}${esc(labels[t.status] || t.status)}</span></div>${transfer}${t.status === 'missing' ? '<p class="detail-notice">原保存位置已找不到文件。定位移动后的文件，即可继续打开和预览。</p>' : ''}${t.error ? `<p class="detail-notice">${esc(friendlyError(t.error))}</p>` : ''}<dl class="detail-properties">${properties.filter(([,value]) => value).map(([label,value]) => `<div><dt>${label}</dt><dd${label === '文件名' && usable ? ' draggable="true" data-drag-file title="拖到 Finder"' : ''}>${esc(value)}</dd></div>`).join('')}</dl>${['done','missing'].includes(t.status) && alternateDownloadActions(e) ? `<section class="detail-alternates" aria-label="下载其他内容"><h4>下载其他内容</h4><div>${alternateDownloadActions(e)}</div><p>直接创建独立任务，无需再次解析链接。</p></section>` : ''}`;
     if ($('jobDetails').innerHTML !== markup) $('jobDetails').innerHTML = markup;
   }
   async function removeEntry(entry) {
     if (entry?.task) await taskAction(entry.task.id, 'delete');
   }
   function choose(key) { selected = key; render(); }
-  function setFilter(value) { filter = value; document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === filter))); $('libraryTitle').textContent = {all:'全部任务',active:'进行中',done:'已完成',attention:'需要处理'}[filter]; render(); }
+  function setFilter(value) { if (matchMedia('(max-width:820px)').matches) { document.body.classList.remove('sidebar-revealed'); syncSidebarAccessibility(); } filter = value; document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === filter))); $('libraryTitle').textContent = {all:'全部任务',active:'进行中',done:'已完成',attention:'需要处理'}[filter]; render(); }
+  function reparseEntry(entry) {
+    const url = entry?.card?.url || entry?.task?.url;
+    if (!url) return;
+    if (parseController) { message('请等待当前解析完成，再添加其他格式。'); return; }
+    openNew(url); void go(); showInspector(true);
+  }
   function openNew(text) { if (settingsOnly) return; setFilter('all'); if (text) $('urls').value = text; $('goBtn').disabled = !parseController && !parseUrls($('urls').value).length; $('urls').scrollIntoView({block:'center'}); $('urls').focus(); }
   async function locateFile(key) {
     const entry = entries.find(e=>e.key===key);
@@ -257,7 +327,36 @@
     message(''); render();
   }, connectionLost() { message('暂时无法连接下载服务，正在重试…'); }, message, setFolder(value) { folder = value || ''; $('sidebarFolder').textContent = folder.split('/').filter(Boolean).at(-1) || '下载文件夹'; $('sidebarFolder').title = folder; } };
   document.addEventListener('click', event => {
-    const row = event.target.closest('[data-entry]'); if (row) choose(row.dataset.entry);
+    const trigger = event.target.closest('[popovertarget]');
+    if (trigger) {
+      const menu = $(trigger.getAttribute('popovertarget'));
+      const rect = trigger.getBoundingClientRect();
+      if (window.electronAPI?.showTaskMenu && menu) {
+        event.preventDefault();
+        const nodes = [...menu.children].filter(node => node.matches('button,hr'));
+        const menuId = menu.id;
+        const descriptors = nodes.map(menuActionDescriptor);
+        const items = nodes.map(node => {
+          if (node.matches('hr')) return {separator:true};
+          const copy = node.cloneNode(true); copy.querySelectorAll('kbd').forEach(k => k.remove());
+          return {label:copy.textContent.trim(),enabled:!node.disabled};
+        });
+        void window.electronAPI.showTaskMenu({items,point:{x:rect.right,y:rect.bottom}}).then(index => {
+          // Resolve the same task/action in the current menu after a progress refresh.
+          // Removed or no-longer-available actions are intentionally ignored.
+          const target = Number.isInteger(index) ? resolveMenuAction(menuId, descriptors[index]) : null;
+          if (target?.isConnected) target.click();
+        }).catch(() => { if (menu.isConnected) menu.showPopover(); });
+        return;
+      }
+      menu.style.left = Math.max(8, Math.min(innerWidth - 244, rect.right - 236)) + 'px';
+      menu.style.top = Math.max(8, Math.min(innerHeight - 280, rect.bottom + 6)) + 'px';
+    }
+    const menu = event.target.closest('.task-menu');
+    if (menu && event.target.closest('button')) menu.hidePopover();
+  });
+  document.addEventListener('click', event => {
+    const row = event.target.closest('[data-entry]'); if (row) { choose(row.dataset.entry); showInspector(true); }
     const tab = event.target.closest('[data-settings-tab]'); if (tab) settingsTab(tab.dataset.settingsTab);
     const target = event.target.closest('[data-workspace]');
     if (target) switch (target.dataset.workspace) {
@@ -268,11 +367,14 @@
       case 'row-info': choose(target.dataset.entryKey); showInspector(true); $('inspector').querySelector('button')?.focus(); break;
       case 'fix-login': openSettings('network'); break;
       case 'locate-file': void locateFile(target.dataset.entryKey); break;
+      case 'row-preview': choose(target.dataset.entryKey); void selectedFile('previewFile'); break;
+      case 'remove-entry': { const e = entries.find(e => e.key === target.dataset.entryKey); if (e?.card && !e.task) { e.card.dismissed = true; e.card.status = 'dismissed'; render(); } break; }
       case 'row-open': choose(target.dataset.entryKey); void selectedFile('openFile'); break;
-      case 'row-reparse': { const entry = entries.find(e => e.key === target.dataset.entryKey); openNew(entry?.card?.url); break; }
+      case 'download-alternate': downloadAlternate(entries.find(e => e.key === target.dataset.entryKey), target.dataset.format); break;
+      case 'row-reparse': { const entry = entries.find(e => e.key === target.dataset.entryKey); reparseEntry(entry); break; }
       case 'folder': if (folder && window.electronAPI) void revealTaskFile(folder); else openSettings(); break;
       case 'batch': void dlAll(); break;
-      case 'reparse': { const e = entries.find(e => e.key === selected); openNew(e?.card?.url || e?.task?.url); break; }
+      case 'reparse': { const e = entries.find(e => e.key === selected); reparseEntry(e); break; }
       case 'remove-draft': { const e = entries.find(e => e.key === selected); if (e?.card) {
         if (e.task) { void removeEntry(e); } else { e.card.dismissed = true; e.card.status = 'dismissed'; render(); }
         } break; }
@@ -299,10 +401,10 @@
     }
   });
   document.addEventListener('click', event => { if (event.target.closest('[data-click-action="open-settings"]') && !window.electronAPI) $('desktopShell').inert = true; if (event.target.closest('[data-click-action="close-settings"]')) $('desktopShell').inert = false; });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('desktopShell').inert = false; if (inspectorVisible) { showInspector(false); document.querySelector('.window-toolbar [data-workspace="inspector"]').focus(); } } });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('.task-menu:popover-open')) { $('desktopShell').inert = false; if (inspectorVisible) { showInspector(false); document.querySelector('.window-toolbar [data-workspace="inspector"]').focus(); } } });
   $('completedSearch').addEventListener('input', render);
-  $('urls').addEventListener('input', () => { $('urls').style.height = 'auto'; $('urls').style.height = Math.min(160, Math.max(82, $('urls').scrollHeight)) + 'px'; $('goBtn').disabled = !parseController && !parseUrls($('urls').value).length; });
-  document.addEventListener('dragstart', event => { if (event.target.id === 'dragFile') { event.preventDefault(); const file = entries.find(e => e.key === selected)?.task?.file; if (file) window.electronAPI?.dragFile(file); } });
+  $('urls').addEventListener('input', () => { $('urls').style.height = 'auto'; $('urls').style.height = Math.min(160, Math.max(64, $('urls').scrollHeight)) + 'px'; $('goBtn').disabled = !parseController && !parseUrls($('urls').value).length; });
+  document.addEventListener('dragstart', event => { if (event.target.closest('[data-drag-file]')) { event.preventDefault(); const file = entries.find(e => e.key === selected)?.task?.file; if (file) window.electronAPI?.dragFile(file); } });
   $('desktopShell').addEventListener('dragover', event => { if ([...event.dataTransfer.types].some(t => ['text/uri-list', 'text/plain'].includes(t))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } });
   $('desktopShell').addEventListener('drop', event => { const text = event.dataTransfer.getData('text/uri-list') || event.dataTransfer.getData('text/plain'); if (text && !event.target.matches('input,textarea')) { event.preventDefault(); openNew(text.split('\n').filter(line => !line.startsWith('#')).join('\n')); } });
   $('defaultQuality').value = preference('quality', 'highest');
@@ -312,6 +414,9 @@
   $('appearance').addEventListener('change', e => savePreference('appearance', e.target.value));
   $('density').addEventListener('change', e => savePreference('density', e.target.value));
   window.addEventListener('storage', applyAppearance);
+  let activityRevision = 0;
+  window.electronAPI?.onWindowActivity?.(active => { activityRevision++; document.body.classList.toggle('window-inactive', !active); });
+  window.electronAPI?.getWindowActivity?.().then(active => { if (!activityRevision) document.body.classList.toggle('window-inactive', !active); }).catch(() => {});
   window.addEventListener('focus', () => { void updateGlass(); if (!settingsOnly) void loadSettings(); });
   window.addEventListener('online', () => void refreshTaskCenter());
   window.electronAPI?.onDesktopCommand(command => { if (command === 'new') openNew(); if (command === 'settings') openSettings(); if (command === 'settings-network') settingsTab('network'); if (command === 'refresh') void refreshTaskCenter(); if (command === 'show-active') setFilter('active'); if (command === 'sidebar' || command === 'inspector') document.querySelector(`.window-toolbar [data-workspace="${command}"]`).click(); if (command.startsWith('select-job:')) void refreshTaskCenter().then(() => { setFilter('all'); const id = command.slice(11); const entry = entries.find(e => e.task?.id === id); if (entry) choose(entry.key); }); });

@@ -182,3 +182,19 @@ try {
 }
 
 console.log("electron utility checks OK");
+
+const certificateCalls = [];
+adHocSignApp('/tmp/MediaDrop.app', (exe,args)=>certificateCalls.push([exe,args]), 'test-signing-identity');
+assert(certificateCalls.some(([exe,args])=>exe==='/usr/bin/codesign' && args.includes('test-signing-identity')), 'Configured signing identity must be used');
+
+const strictAssert = require('node:assert/strict');
+const {releaseSigningConfig} = require('./adhoc-sign');
+strictAssert.throws(()=>releaseSigningConfig({}), /stable macOS signing/);
+strictAssert.throws(()=>releaseSigningConfig({MEDIADROP_SIGNING_IDENTITY:'-'}), /stable macOS signing/);
+strictAssert.throws(()=>releaseSigningConfig({CI:'true',MEDIADROP_SIGNING_IDENTITY:'certificate'}), /SIGNING_REQUIREMENT/);
+strictAssert.equal(releaseSigningConfig({}, {identity:'local-certificate'}).identity,'local-certificate');
+const releaseIdentity = releaseSigningConfig({CI:'true',MEDIADROP_SIGNING_IDENTITY:'certificate',MEDIADROP_SIGNING_REQUIREMENT:'identifier "com.mediadrop.desktop"'});
+const verifiedCalls=[];
+adHocSignApp('/tmp/test-release.app',(exe,args)=>verifiedCalls.push(args), releaseIdentity.identity, releaseIdentity.requirement);
+assert(verifiedCalls.some(args=>args.includes('-R') && args.includes(`=${releaseIdentity.requirement}`)));
+console.log('OK release signing fails closed and checks expected identity');

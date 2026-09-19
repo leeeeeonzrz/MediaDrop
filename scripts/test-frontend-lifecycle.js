@@ -34,9 +34,9 @@ function createHarness(handler) {
   let timerId = 0;
   const elements = { urls: { value: "https://example.com/new" }, goBtn: {}, cards: {} };
   const context = {
-    AbortController, Promise, Set, console,
+    AbortController, Promise, Set, console, DOMException, crypto:require("node:crypto").webcrypto,
     cardData: [{ url: "https://example.com/old", title: "Old", format: "video", status: "ready" }],
-    parseController: null, notifiedJobs: new Set(), window: {},
+    parseController: null, parseRequestIds:new Set(), notifiedJobs: new Set(), window: {},
     document: { getElementById: id => elements[id], querySelector: () => null },
     currentCardFormat: idx => context.cardData[idx].format || "video",
     renderCard: idx => renders.push({ idx, title: context.cardData[idx]?.title, status: context.cardData[idx]?.status }),
@@ -237,3 +237,30 @@ async function test(name, run) {
   console.error(error);
   process.exitCode = 1;
 });
+
+(async () => {
+  const h = createHarness(() => response({}));
+  h.context.document.getElementById('urls').value = Array.from({length:6},(_,i)=>`https://example.com/${i}`).join('\n');
+  const pending = new Map(); let submitted=0, cancelled=0;
+  h.context.fetch = async (url,options) => {
+    if (url === '/api/info') {
+      submitted++;
+      const id=JSON.parse(options.body).request_id;
+      return new Promise(resolve=>pending.set(id,resolve));
+    }
+    const id = url.split('/')[3];
+    assert(pending.has(id)); cancelled++;
+    pending.get(id)(response({error:'已取消解析',cancelled:true},409));
+    return response({cancelled:true});
+  };
+  const parsing = h.context.go();
+  await Promise.resolve();
+  const cancelling = h.context.go();
+  await Promise.all([parsing,cancelling]);
+  assert.equal(submitted,4,'Cancellation must stop unscheduled URLs');
+  assert.equal(cancelled,4,'Every active extractor must receive cancellation');
+  assert.equal(h.context.parseRequestIds.size,0);
+  assert.equal(h.context.parseController,null);
+  assert(h.context.cardData.slice(1).every(c=>c.status==='info-error'));
+  console.log('OK batch parsing cancels server requests and prevents queued work');
+})().catch(error=>{console.error(error);process.exitCode=1;});

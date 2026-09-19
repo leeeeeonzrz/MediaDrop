@@ -50,9 +50,34 @@ jobs:
       (github.event.inputs.platforms == 'all' ||
       github.event.inputs.platforms == 'mac')
     runs-on: macos-latest
+    env:
+      MEDIADROP_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MEDIADROP_SIGNING_REQUIREMENT: ${{ secrets.MACOS_SIGNING_REQUIREMENT }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Import stable signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CERTIFICATE_BASE64:?Configure the existing signing certificate before publishing}"
+          : "${MEDIADROP_SIGNING_IDENTITY:?Missing signing identity}"
+          : "${MEDIADROP_SIGNING_REQUIREMENT:?Missing expected designated requirement}"
+          CERT_PATH="$RUNNER_TEMP/mediadrop-signing.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/mediadrop-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERTIFICATE_PASSWORD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          rm -f "$CERT_PATH"
 
       - uses: actions/setup-node@v4
         with:
@@ -113,6 +138,13 @@ jobs:
           name: build-mac-arm64
           path: dist/*.dmg
           if-no-files-found: error
+
+      - name: Remove signing keychain
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/mediadrop-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/mediadrop-signing.p12"
 
   build-win:
     needs: test

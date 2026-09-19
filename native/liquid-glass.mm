@@ -3,9 +3,11 @@
 #import <objc/runtime.h>
 #include <node_api.h>
 #include <cstring>
+#include <string>
+#import "glass-inspector.h"
 
 API_AVAILABLE(macos(26.0))
-@interface MediaDropGlassView : NSGlassEffectView
+@interface MediaDropGlassView : NSVisualEffectView
 @end
 @implementation MediaDropGlassView
 - (NSView *)hitTest:(NSPoint)point { return nil; }
@@ -34,8 +36,11 @@ static napi_value Apply(napi_env env, napi_callback_info info) {
                 && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
             if (enabled && !glass) {
                 glass = [[MediaDropGlassView alloc] initWithFrame:root.bounds];
-                glass.style = NSGlassEffectViewStyleRegular;
-                glass.cornerRadius = 0;
+                // A standard desktop material is the window backdrop, not another
+                // Liquid Glass sheet below the floating inspector.
+                glass.material = NSVisualEffectMaterialSidebar;
+                glass.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                glass.state = NSVisualEffectStateFollowsWindowActiveState;
                 glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
                 [root addSubview:glass positioned:NSWindowBelow relativeTo:nil];
                 objc_setAssociatedObject(root, &glassKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -53,6 +58,8 @@ static napi_value Apply(napi_env env, napi_callback_info info) {
 }
 static napi_value Init(napi_env env, napi_value exports) {
     napi_value fn; napi_create_function(env, "apply", NAPI_AUTO_LENGTH, Apply, nullptr, &fn);
-    napi_set_named_property(env, exports, "apply", fn); return exports;
+    napi_set_named_property(env, exports, "apply", fn);
+    napi_create_function(env, "inspector", NAPI_AUTO_LENGTH, Inspector, nullptr, &fn);
+    napi_set_named_property(env, exports, "inspector", fn); return exports;
 }
 NAPI_MODULE(NODE_GYP_MODULE_NAME, Init)

@@ -4,6 +4,7 @@ function uiIcon(name) {
 
 let cardData = [];
 let parseController = null;
+const parseRequestIds = new Set();
 let taskRefreshTimer = null;
 const notifiedJobs = new Set();
 
@@ -121,6 +122,7 @@ async function changeAuthMode() {
   if (mode === 'none') {
     await postConfig({ cookies_browser: '', cookies_file: '' }, '已停用 YouTube Cookie');
   } else if (mode === 'browser') {
+    await window.electronAPI?.requestBrowserAccess?.(document.getElementById('cookiesBrowser').value || 'chrome');
     await postConfig({ cookies_browser: document.getElementById('cookiesBrowser').value || 'chrome', cookies_file: '' }, '已启用浏览器 Cookie');
   } else {
     await postConfig({ cookies_browser: '' }, '已启用 cookies.txt 认证');
@@ -129,6 +131,7 @@ async function changeAuthMode() {
 
 async function saveCookies() {
   const browser = document.getElementById('cookiesBrowser').value;
+  await window.electronAPI?.requestBrowserAccess?.(browser);
   await postConfig({ cookies_browser: browser, cookies_file: '' }, `已选择 ${browser} Cookie`);
 }
 
@@ -507,7 +510,11 @@ function friendlyError(err) {
   if (err.includes('HTTP Error 404')) return '未找到该视频';
   if (err.includes('Sign in to confirm')) return 'YouTube 需要登录认证，请在设置中选择已登录的浏览器或 cookies.txt';
   if (err.includes('Operation not permitted') && err.includes('Safari')) return '暂不支持 Safari，请登录 Chrome 或 Firefox 后在设置中选择对应浏览器';
-  if (err.toLowerCase().includes('cookie')) return '浏览器 Cookie 无法读取或已失效；请彻底关闭浏览器后重试，或改用 Firefox / cookies.txt';
+  if (err.includes('MACOS_BROWSER_ACCESS_DENIED')) return 'macOS 已阻止访问浏览器数据。请到系统设置 → 隐私与安全 → 文件与文件夹 → MediaDrop，开启对应浏览器权限；无需重新登录。';
+  if (err.includes('BROWSER_KEYCHAIN_FAILED')) return '无法解密浏览器 Cookie。请允许下载组件访问 Chrome Safe Storage 等浏览器钥匙串项目，然后重新解析。';
+  if (err.includes('BROWSER_PROFILE_MISSING')) return '未找到所选浏览器的 Cookie 数据库，请确认使用的是已登录的浏览器及其配置目录。';
+  if (err.includes('BROWSER_DATABASE_LOCKED')) return '浏览器 Cookie 数据库被占用，请完全退出所选浏览器后重试。';
+  if (err.toLowerCase().includes('cookie')) return '无法读取浏览器 Cookie。请在设置中检查浏览器数据访问权限或选择 cookies.txt；此错误不代表登录已失效。';
   if (err.toLowerCase().includes('copyright')) return '视频因版权限制而无法下载';
   if (err.toLowerCase().includes('geo')) return '当前地区无法播放此视频';
   if (err.includes('timed out') || err.includes('Timed out')) return '请求超时，请重试';
@@ -561,7 +568,22 @@ function isWebmFormat(format) {
 
 async function go() {
   if (parseController) {
-    parseController.abort();
+    const controller = parseController;
+    if (controller.cancelling) return;
+    controller.cancelling = true;
+    document.getElementById('goBtn').textContent = '正在取消…';
+    controller.cancelPromise = (async () => { try {
+      await Promise.all([...parseRequestIds].map(async id => {
+        const response = await fetch(`/api/info/${encodeURIComponent(id)}/cancel`, {method:'POST'});
+        if (!response.ok) throw new Error('无法停止后台解析，请重试取消');
+      }));
+      controller.abort();
+    } catch (error) {
+      window.mediaWorkspace?.message(error.message);
+      document.getElementById('goBtn').textContent = '取消解析';
+      controller.cancelling = false;
+    } })();
+    await controller.cancelPromise;
     return;
   }
   const urls = parseUrls(document.getElementById('urls').value);
@@ -570,7 +592,7 @@ async function go() {
   const selectedPreset = document.getElementById('defaultQuality')?.value || 'highest';
   const btn = document.getElementById('goBtn');
   const container = document.getElementById('cards');
-  parseController = new AbortController();
+  const controller = parseController = new AbortController();
   btn.textContent = '取消解析';
   const firstIndex = cardData.length;
   urls.forEach(url => cardData.push({ url, status: 'loading' }));
@@ -582,12 +604,15 @@ async function go() {
       const offset = nextIndex++;
       const idx = firstIndex + offset;
       const url = urls[offset];
+      const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+      parseRequestIds.add(requestId);
     try {
+      if (controller.signal.aborted || controller.cancelling) throw new DOMException('Cancelled', 'AbortError');
       const res = await fetch('/api/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-        signal: parseController.signal,
+        body: JSON.stringify({ url, request_id: requestId }),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (data.error) {
@@ -616,6 +641,7 @@ async function go() {
     } catch (err) {
       cardData[idx] = { ...cardData[idx], status: 'info-error', error: err.name === 'AbortError' ? '已取消解析' : err.message };
     }
+    parseRequestIds.delete(requestId);
     renderCard(idx);
     }
   };
@@ -626,6 +652,7 @@ async function go() {
     renderDownloadAll();
   }
 
+  await controller.cancelPromise;
   parseController = null;
   btn.textContent = '解析链接';
   btn.disabled = !parseUrls(document.getElementById('urls').value).length;
@@ -1252,3 +1279,11 @@ if (window.electronAPI?.getAppUpdateState) {
 }
 
 refreshTaskCenter();
+
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-browser-permission]')) void window.electronAPI?.requestBrowserAccess?.(document.getElementById('cookiesBrowser').value || 'chrome');
+});
+
+if (window.electronAPI?.requestBrowserAccess && /Mac/.test(navigator.platform)) {
+  document.querySelector('[data-browser-permission]').hidden = false;
+}

@@ -10,6 +10,6 @@ done
 mkdir -p "$ROOT_DIR/build/native"
 xcrun clang++ -std=c++17 -fobjc-arc -shared -undefined dynamic_lookup \
   -DNAPI_VERSION=8 -DNODE_GYP_MODULE_NAME=mediadrop_glass \
-  -mmacosx-version-min=11.0 -isysroot "$(xcrun --show-sdk-path)" \
-  -I "$HEADERS" -framework AppKit \
+  -mmacosx-version-min=11.0 -isysroot "${SDKROOT:-$(xcrun --show-sdk-path)}" \
+  -I "$HEADERS" -framework AppKit -framework WebKit \
   "$ROOT_DIR/native/liquid-glass.mm" -o "$ROOT_DIR/build/native/liquid-glass.node"

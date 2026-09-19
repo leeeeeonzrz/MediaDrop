@@ -21,16 +21,19 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
+from functools import wraps
 
-from flask import Flask, request, jsonify, send_file, render_template, redirect, make_response
+from flask import Flask, g, request, jsonify, send_file, render_template, redirect, make_response
 from werkzeug.serving import make_server
 
 try:
+    from parse_jobs import ParseJobs, ParseCancelled
     import youtube_compat
     from hdr_metadata import describe_format, inspect_file
     from data_lock import DataDirectoryLock
     from job_store import ACTIVE_STATUSES, JobStore, is_recoverable_job
 except ImportError:
+    from app.parse_jobs import ParseJobs, ParseCancelled
     from app import youtube_compat
     from app.hdr_metadata import describe_format, inspect_file
     from app.data_lock import DataDirectoryLock
@@ -302,6 +305,7 @@ def apply_security_headers(response):
 
 def cleanup_all_jobs():
     """Stop child processes while preserving resumable task caches."""
+    info_jobs.cancel_all()
     youtube_compat.provider.close()
     with queue_lock, jobs_lock:
         if shutdown_event.is_set():
@@ -522,6 +526,30 @@ def get_cookie_args(cfg=None):
     if browser:
         return ["--cookies-from-browser", browser]
     return []
+
+
+def browser_cookie_failure_code(error_text, browser=""):
+    text = str(error_text or "").lower()
+    roots = {"chrome": "Google/Chrome", "edge": "Microsoft Edge",
+             "brave": "BraveSoftware/Brave-Browser", "firefox": "Firefox/Profiles",
+             "opera": "com.operasoftware.Opera", "vivaldi": "Vivaldi"}
+    if sys.platform == "darwin" and browser in roots and any(
+        marker in text for marker in ("could not find", "permission", "operation not permitted", "cookie database")
+    ):
+        try:
+            with os.scandir(os.path.expanduser("~/Library/Application Support/" + roots[browser])) as entries:
+                next(entries, None)
+        except PermissionError:
+            return "MACOS_BROWSER_ACCESS_DENIED"
+        except OSError:
+            pass
+    if any(marker in text for marker in ("keychain", "keyring", "failed to decrypt", "nonetype' object has no attribute 'decode")):
+        return "BROWSER_KEYCHAIN_FAILED"
+    if "could not find" in text and "cookie" in text:
+        return "BROWSER_PROFILE_MISSING"
+    if any(marker in text for marker in ("database is locked", "could not copy", "being used by another process")):
+        return "BROWSER_DATABASE_LOCKED"
+    return ""
 
 
 def is_browser_cookie_error(error_text):
@@ -2040,7 +2068,46 @@ def normalize_download_options(value):
     }
 
 
+info_jobs = ParseJobs(terminate_process_tree)
+
+
+def cancellable_info(handler):
+    @wraps(handler)
+    def wrapped():
+        data = request.get_json(silent=True) or {}
+        request_id = data.get('request_id') if isinstance(data, dict) else None
+        if request_id is None:
+            return handler()  # Compatibility with older API clients.
+        if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', request_id):
+            return jsonify({'error': 'Invalid parse request ID'}), 400
+        try:
+            with info_jobs.register(request_id) as state:
+                g.parse_state = state
+                return handler()
+        except ParseCancelled:
+            return jsonify({'error': '已取消解析', 'cancelled': True}), 409
+        except ValueError as error:
+            return jsonify({'error': str(error)}), 409
+    return wrapped
+
+
+@app.route('/api/info/<request_id>/cancel', methods=['POST'])
+def cancel_info(request_id):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', request_id):
+        return jsonify({'error': 'Invalid parse request ID'}), 400
+    info_jobs.cancel(request_id)
+    return jsonify({'cancelled': True})
+
+
+def run_info_process(command, **kwargs):
+    state = getattr(g, 'parse_state', None)
+    if state is None:
+        return subprocess.run(command, **kwargs)
+    return info_jobs.run(state, command, env=kwargs.get('env'), timeout=kwargs.get('timeout', 60))
+
+
 @app.route("/api/info", methods=["POST"])
+@cancellable_info
 def get_info():
     data = request.json
     url = data.get("url", "").strip()
@@ -2063,13 +2130,19 @@ def get_info():
             cmd += ["--ffmpeg-location", ffmpeg_dir]
         cmd_with_cookies = cmd + cookie_args
         print("[info] Fetching video info", file=sys.stderr, flush=True)
-        result = subprocess.run(
+        result = run_info_process(
             cmd_with_cookies,
             capture_output=True,
             text=True,
             timeout=60,
             env=get_ytdlp_env(),
         )
+
+        cookie_failure_code = ""
+        if result.returncode != 0 and uses_browser_cookies(cookie_args):
+            cookie_failure_code = browser_cookie_failure_code(result.stderr, cookie_args[1])
+            if cookie_failure_code in ("MACOS_BROWSER_ACCESS_DENIED", "BROWSER_KEYCHAIN_FAILED", "BROWSER_PROFILE_MISSING"):
+                return jsonify({"error": cookie_failure_code, "error_code": cookie_failure_code}), 400
 
         skip_browser_cookies = False
         cookie_warning = ""
@@ -2085,7 +2158,7 @@ def get_info():
                 file=sys.stderr,
                 flush=True,
             )
-            result = subprocess.run(
+            result = run_info_process(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -2106,6 +2179,8 @@ def get_info():
             if "Operation not permitted" in err_detail and "Safari" in err_detail:
                 return jsonify({"error": "Safari is not supported due to macOS sandbox restrictions. Open Chrome or Firefox, log into YouTube, then select that browser in Settings > Cookies."}), 400
             if browser_cookie_failure:
+                if cookie_failure_code:
+                    return jsonify({"error": cookie_failure_code, "error_code": cookie_failure_code}), 400
                 return jsonify({
                     "error": (
                         "Browser Cookie unavailable: the browser Cookie database could not be read or decrypted. "
@@ -2115,6 +2190,8 @@ def get_info():
             return jsonify({"error": err_detail.split("\n")[-1]}), 400
 
         info = json.loads(result.stdout)
+    except ParseCancelled:
+        raise
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Timed out fetching video info"}), 400
     except Exception as e:

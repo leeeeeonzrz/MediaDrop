@@ -11,10 +11,10 @@
   <div class="desktop-shell" id="desktopShell">
     <header class="window-toolbar">
       <div class="toolbar-sidebar"><span class="web-brand">MediaDrop</span><button class="toolbar-button" data-workspace="sidebar" aria-label="切换侧边栏" title="侧边栏"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#sidebar"></use></svg></button></div>
-      <div class="toolbar-content"><h1 id="libraryTitle">全部任务</h1><span class="toolbar-spacer"></span><button class="toolbar-button" data-workspace="inspector" aria-label="切换任务详情" aria-pressed="false" title="任务信息"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#inspector"></use></svg></button></div>
+      <div class="toolbar-content"><h1 id="libraryTitle">全部任务</h1><span class="toolbar-spacer"></span><div class="toolbar-actions" role="group" aria-label="视图与设置"><button class="toolbar-button" data-workspace="inspector" aria-label="切换任务详情" aria-pressed="false" title="任务信息"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#inspector"></use></svg></button><button class="toolbar-button" data-click-action="open-settings" aria-label="设置" title="设置"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#gear"></use></svg></button></div></div>
     </header>
     <div class="workspace-layout">
-      <nav class="sidebar" aria-label="资料库">
+      <nav class="sidebar" aria-label="资料库"><div class="sidebar-heading"><span>资料库</span><button class="icon-btn" data-workspace="sidebar" aria-label="收起侧栏"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#close"></use></svg></button></div>
         <span class="sidebar-label">下载</span>
         <button data-workspace="filter" data-filter="all" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg>全部任务<b id="count-all">0</b></button>
         <button data-workspace="filter" data-filter="active" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#download"></use></svg>进行中<b id="count-active">0</b></button>
@@ -42,7 +42,7 @@
         <div class="empty-library" id="emptyLibrary"><div class="empty-mark" aria-hidden="true"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#download"></use></svg></div><h2>还没有下载项目</h2><p>在上方粘贴视频链接，或将链接拖入窗口。<br>解析后即可选择画质并下载。</p></div>
         <section id="taskCenter" hidden><span id="taskSummary"></span><div id="taskList"></div></section>
       </main>
-      <aside class="inspector" id="inspector" inert aria-label="任务详情"><div class="inspector-heading"><h2>信息</h2><button class="icon-btn" data-workspace="inspector" aria-label="收起详情"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#close"></use></svg></button></div><div id="inspectorEmpty"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#inspector"></use></svg><p>未选择项目</p><span>选择下载项目以查看信息。</span></div><div id="cards" class="cards"></div><div id="jobDetails"></div></aside>
+      <aside class="inspector" id="inspector" inert aria-label="任务详情"><div class="inspector-heading"><h2>信息</h2><button class="icon-btn" data-workspace="inspector" aria-label="收起详情"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#close"></use></svg></button></div><div class="inspector-scroll"><div id="inspectorEmpty"><svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#inspector"></use></svg><p>未选择项目</p><span>选择下载项目以查看信息。</span></div><div id="cards" class="cards"></div><div id="jobDetails"></div></div><footer id="inspectorActions" class="inspector-actions" hidden></footer></aside>
     </div>
     <footer class="workspace-footer visually-hidden"><span id="workspaceStatus" role="status">准备就绪</span><span id="desktopHint">MediaDrop</span></footer>
   </div>
@@ -125,7 +125,7 @@
               <option value="vivaldi">Vivaldi</option>
             </select>
           </span>
-          <span class="field-help">macOS 暂不支持从 Safari 提取 Cookie。</span>
+          <span class="field-help">macOS 需允许访问所选浏览器数据；首次解密还可能请求钥匙串授权。拒绝数据访问后，请到系统设置的“文件与文件夹”中开启对应浏览器权限。</span>
         </label>
         <label class="field conditional-field" id="cookieFileField" hidden>
           <span class="field-label">Cookie 文件</span>
@@ -135,6 +135,7 @@
           </span>
         </label>
         <div class="tool-actions tool-actions-top">
+          <button class="secondary-btn" type="button" data-browser-permission hidden>检查浏览器权限（macOS 桌面版）</button>
           <button class="secondary-btn" type="button" data-click-action="test-cookies">测试登录状态</button>
         </div>
       </section>
@@ -169,5 +170,6 @@
 
   <script src="/static/app.js" defer></script>
   <script src="/static/workspace.js" defer></script>
+  <script src="/static/native-inspector.js" defer></script>
 </body>
 </html>

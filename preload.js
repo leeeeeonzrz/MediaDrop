@@ -1,9 +1,19 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
+  requestBrowserAccess: browser => ipcRenderer.invoke('request-browser-access', browser),
   updateNativeGlass: appearance => ipcRenderer.invoke("native-glass", appearance),
+  updateNativeInspector: state => ipcRenderer.invoke('native-inspector', state),
+  onNativeInspectorAction: callback => { const handler = (_event, value) => callback(value); ipcRenderer.on('native-inspector-action', handler); return () => ipcRenderer.removeListener('native-inspector-action', handler); },
+  showTaskMenu: request => ipcRenderer.invoke('task-menu', request),
+  updateNativeSidebar: state => ipcRenderer.invoke('native-sidebar', state),
+  onNativeSidebarAction: callback => { const handler = (_event, value) => callback(value); ipcRenderer.on('native-sidebar-action', handler); return () => ipcRenderer.removeListener('native-sidebar-action', handler); },
+  updateNativeToolbar: state => ipcRenderer.invoke('native-toolbar', state),
+  onNativeToolbarAction: callback => { const handler = (_event, value) => callback(value); ipcRenderer.on('native-toolbar-action', handler); return () => ipcRenderer.removeListener('native-toolbar-action', handler); },
   closeSettings: () => ipcRenderer.invoke("close-settings-window"),
   openSettings: tab => ipcRenderer.invoke("open-settings-window", tab),
+  getWindowActivity: () => ipcRenderer.invoke('window-activity'),
+  onWindowActivity: callback => { const handler = (_event, active) => callback(active); ipcRenderer.on('window-activity', handler); return () => ipcRenderer.removeListener('window-activity', handler); },
   getAppearance: () => ipcRenderer.invoke("desktop-appearance"),
   previewFile: file => ipcRenderer.invoke("preview-file", file),
   openFile: file => ipcRenderer.invoke("open-media-file", file),

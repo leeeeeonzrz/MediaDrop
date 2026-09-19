@@ -22,6 +22,7 @@ const {
 
 const nativeGlass = require("./native-glass");
 nativeGlass.install(require("electron"));
+require("./native-menus").installNativeMenus(require("electron"));
 
 let mainWindow = null;
 let settingsWindow = null;
@@ -514,6 +515,34 @@ function openSettingsWindow(tab) {
 }
 
 // --- IPC handlers (called from renderer via preload.js) ---
+async function browserAccess(browser = 'chrome') {
+  const result = await require('./browser-permissions').requestBrowserAccess(browser, {home:os.homedir()});
+  const detail = {
+    denied: 'macOS 已阻止访问浏览器数据。请在“系统设置 → 隐私与安全 → 文件与文件夹 → MediaDrop”中开启对应浏览器。重新登录或关闭浏览器无法解除此限制。',
+    missing: '尚未找到该浏览器的数据目录。请先安装并打开此浏览器，或在设置中选择其他浏览器。',
+    error: '无法检查浏览器数据权限，请稍后在设置中重试。',
+  }[result.status];
+  if (detail) {
+    const answer = await dialog.showMessageBox({type:'info',message:'浏览器数据访问',detail,
+      buttons:result.status === 'denied' ? ['打开系统设置','稍后'] : ['好'],cancelId:result.status === 'denied' ? 1 : 0});
+    if (result.status === 'denied' && answer.response === 0) await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders');
+  }
+  return result;
+}
+ipcMain.handle('request-browser-access', (_event, browser) => browserAccess(browser));
+async function firstRunBrowserAccess() {
+  if (process.platform !== 'darwin') return;
+  const marker = path.join(app.getPath('userData'),'browser-permission-intro-v1.json');
+  if (fs.existsSync(marker)) return;
+  const answer = await dialog.showMessageBox(mainWindow,{type:'info',title:'浏览器登录授权',
+    message:'允许 MediaDrop 使用浏览器登录状态？',
+    detail:'读取 Chrome 登录 Cookie 可用于解析需要登录的视频。下一步 macOS 可能询问是否允许访问 Chrome 数据，请选择允许。解密时也可能出现 Chrome Safe Storage 钥匙串提示。你可以稍后在设置中选择其他浏览器或 cookies.txt。',
+    buttons:['授权 Chrome','选择其他方式','暂不授权'],defaultId:0,cancelId:2});
+  if (answer.response === 0) await browserAccess('chrome');
+  else if (answer.response === 1) openSettingsWindow('network');
+  fs.writeFileSync(marker,JSON.stringify({shown:true}));
+}
+
 ipcMain.handle("close-settings-window", event => {
   if (!settingsWindow || settingsWindow.isDestroyed() || event.sender !== settingsWindow.webContents || event.senderFrame !== event.sender.mainFrame) return false;
   settingsWindow.close();
@@ -602,6 +631,7 @@ app.whenReady().then(async () => {
     desktop = installDesktop({ electron: require("electron"), getMainWindow: () => mainWindow,
       createMainWindow: createWindow, readJobs: readDesktopJobs, openSettingsWindow });
     createWindow();
+    mainWindow.webContents.once('did-finish-load', () => { void firstRunBrowserAccess().catch(error => console.error('Browser permission introduction failed:',error.code || 'unknown')); });
     const firstUpdateCheck = setTimeout(() => checkForAppUpdate(false), 30000);
     firstUpdateCheck.unref();
     const updateTimer = setInterval(() => checkForAppUpdate(false), UPDATE_CHECK_INTERVAL);

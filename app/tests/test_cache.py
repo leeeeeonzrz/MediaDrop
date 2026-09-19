@@ -968,6 +968,23 @@ class PersistenceAndApiTests(unittest.TestCase):
         self.assertEqual(args, ["--js-runtimes", f"node:{runtime}"])
         self.assertEqual(env["ELECTRON_RUN_AS_NODE"], "1")
 
+    def test_info_reports_browser_access_denied_without_anonymous_retry(self):
+        failed = subprocess.CompletedProcess([], 1, '', 'could not find chrome cookies database')
+        with mock.patch.object(server, 'get_extractor_command', return_value=(['yt-dlp'], 'standard')), mock.patch.object(server, 'get_cookie_args', return_value=['--cookies-from-browser','chrome']), mock.patch.object(server, 'browser_cookie_failure_code', return_value='MACOS_BROWSER_ACCESS_DENIED'), mock.patch.object(server.subprocess, 'run', return_value=failed) as run:
+            response = server.app.test_client().post('/api/info', json={'url':'https://example.com/video'})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['error_code'], 'MACOS_BROWSER_ACCESS_DENIED')
+        self.assertEqual(run.call_count, 1)
+
+    def test_browser_permission_denial_is_not_missing_profile(self):
+        with mock.patch.object(server.sys, 'platform', 'darwin'), mock.patch.object(server.os, 'scandir', side_effect=PermissionError(1, 'Operation not permitted')):
+            self.assertEqual(server.browser_cookie_failure_code('could not find chrome cookies database', 'chrome'), 'MACOS_BROWSER_ACCESS_DENIED')
+        with mock.patch.object(server.sys, 'platform', 'darwin'), mock.patch.object(server.os, 'scandir', side_effect=FileNotFoundError()):
+            self.assertEqual(server.browser_cookie_failure_code('could not find chrome cookies database', 'chrome'), 'BROWSER_PROFILE_MISSING')
+        self.assertEqual(server.browser_cookie_failure_code('failed to decrypt cookies'), 'BROWSER_KEYCHAIN_FAILED')
+        self.assertEqual(server.browser_cookie_failure_code('cookie database is locked'), 'BROWSER_DATABASE_LOCKED')
+        self.assertEqual(server.browser_cookie_failure_code('Sign in to confirm'), '')
+
     def test_info_retries_without_browser_cookies_when_database_is_locked(self):
         failed = subprocess.CompletedProcess(
             [], 1, "", "ERROR: Could not copy Chrome cookie database. Permission denied"
@@ -975,7 +992,8 @@ class PersistenceAndApiTests(unittest.TestCase):
         succeeded = subprocess.CompletedProcess(
             [], 0, json.dumps({"title": "Public video", "formats": []}), ""
         )
-        with mock.patch.object(server, "get_ytdlp_path", return_value="yt-dlp"), \
+        with mock.patch.object(server.sys, "platform", "win32"), \
+             mock.patch.object(server, "get_ytdlp_path", return_value="yt-dlp"), \
              mock.patch.object(server, "get_proxy_url", return_value=""), \
              mock.patch.object(server, "get_cookie_args", return_value=["--cookies-from-browser", "chrome"]), \
              mock.patch.object(server, "get_ffmpeg_dir", return_value=None), \
