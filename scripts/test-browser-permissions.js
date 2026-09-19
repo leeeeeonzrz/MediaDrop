@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const {requestBrowserAccess} = require('../browser-permissions');
 (async()=>{
   let reads = 0;
-  const opts = {platform:'darwin',home:'/test',read:async p=>{reads++;assert.equal(p,'/test/Library/Application Support/Google/Chrome');}};
+  const opts = {platform:'darwin',home:'/test',read:async p=>{reads++;assert.equal(p,require('node:path').join('/test','Library','Application Support','Google/Chrome'));}};
   assert.equal((await requestBrowserAccess('chrome',opts)).status,'granted');
   assert.equal(reads,1);
   for (const [code,status] of [['EPERM','denied'],['EACCES','denied'],['ENOENT','missing'],['EIO','error']]) {
