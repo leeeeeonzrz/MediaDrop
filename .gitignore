@@ -48,6 +48,7 @@ assets/*.mp4
 
 # Duplicate project directories
 mediadrop/
+!plugins/mediadrop/
 reclip/
 
 # CodeGraph

@@ -26,7 +26,7 @@ function verifyBundle(appPath = defaultAppPath) {
     fs.accessSync(file, fs.constants.X_OK);
   }
 
-  for (const name of ["server/build/main.js", "server/node_modules/canvas/build/Release/canvas.node", "plugin/yt_dlp_plugins", "manifest.json"]) {
+  for (const name of ["server/build/main.js", "server/node_modules/canvas/build/Release/canvas.node", "plugin/yt_dlp_plugins", "mediadrop/yt_dlp_plugins/extractor/mediadrop_player.py", "mediadrop/yt_dlp_plugins/extractor/_mediadrop_policy.py", "manifest.json"]) {
     if (!fs.existsSync(path.join(appBinDir, "youtube", name))) throw new Error(`Missing YouTube component: ${name}`);
   }
   if (!fs.existsSync(path.join(appPath, "Contents", "Resources", "native", "liquid-glass.node"))) throw new Error("Missing native Liquid Glass bridge");

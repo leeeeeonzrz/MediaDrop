@@ -57,15 +57,37 @@ class ParseJobs:
         for request_id in ids:
             self.cancel(request_id)
 
-    def run(self, state, command, *, env, timeout=60):
+    def run(self, state, command, *, env, timeout=60, on_stderr=None):
         with self.lock:
             if state['cancelled']:
                 raise ParseCancelled()
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        text=True, env=env, start_new_session=sys.platform != 'win32')
             state['process'] = process
+        reader = None
+        stderr_lines = []
+        if on_stderr is not None:
+            stream = process.stderr
+            # communicate still owns stdout and timeout/cancellation. Only this
+            # reader owns stderr, avoiding two consumers on the same pipe.
+            process.stderr = None
+            def read_stderr():
+                try:
+                    for line in stream:
+                        stderr_lines.append(line)
+                        try:
+                            on_stderr(line)
+                        except Exception:
+                            pass  # Diagnostics must never fail extraction.
+                finally:
+                    stream.close()
+            reader = threading.Thread(target=read_stderr, daemon=True)
+            reader.start()
         try:
             stdout, stderr = process.communicate(timeout=timeout)
+            if reader is not None:
+                reader.join(timeout=5)
+                stderr = ''.join(stderr_lines)
             if state['cancelled']:
                 raise ParseCancelled()
             return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
@@ -73,5 +95,7 @@ class ParseJobs:
             if process.poll() is None:
                 self.terminate(process)
                 process.communicate(timeout=5)
+            if reader is not None:
+                reader.join(timeout=5)
             with self.lock:
                 state['process'] = None

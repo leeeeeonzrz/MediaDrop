@@ -35,7 +35,7 @@ class ParseCancellationTests(unittest.TestCase):
             def worker():
                 try:
                     with jobs.register('one') as state:
-                        jobs.run(state, command, env=os.environ.copy())
+                        jobs.run(state, command, env=os.environ.copy(), on_stderr=lambda line: None)
                 except ParseCancelled:
                     errors.append('cancelled')
             thread = threading.Thread(target=worker)
@@ -58,7 +58,7 @@ class ParseCancellationTests(unittest.TestCase):
         jobs = ParseJobs(server.terminate_process_tree)
         with self.assertRaises(subprocess.TimeoutExpired):
             with jobs.register('timeout') as state:
-                jobs.run(state, [sys.executable, '-c', 'import time; time.sleep(15)'], env=os.environ.copy(), timeout=.1)
+                jobs.run(state, [sys.executable, '-c', 'import time; time.sleep(15)'], env=os.environ.copy(), timeout=.1, on_stderr=lambda line: None)
         self.assertEqual(jobs.active, {})
         self.assertIsNone(state['process'])
 

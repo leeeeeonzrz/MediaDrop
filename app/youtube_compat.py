@@ -94,6 +94,6 @@ def command(runtime):
     if not runtime or not os.path.isfile(runtime) or not binary.is_file() or not (root / 'server/build/main.js').is_file():
         raise RuntimeError('YouTube 增强组件不完整，请安装完整的新版 MediaDrop。')
     port = provider.start(root, runtime)
-    return [str(binary), '--ignore-config', '--plugin-dirs', str(root),
+    return [str(binary), '--ignore-config', '--no-plugin-dirs', '--plugin-dirs', str(root),
             '--extractor-args', 'youtube:formats=duplicate;player_client=web;webpage_client=web',
             '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:%s' % port]

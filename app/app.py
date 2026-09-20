@@ -27,12 +27,18 @@ from flask import Flask, g, request, jsonify, send_file, render_template, redire
 from werkzeug.serving import make_server
 
 try:
+    from info_cache import InfoCache
+    from parse_timing import ParseTiming
+    from player_script_cache import PlayerScriptCache
     from parse_jobs import ParseJobs, ParseCancelled
     import youtube_compat
     from hdr_metadata import describe_format, inspect_file
     from data_lock import DataDirectoryLock
     from job_store import ACTIVE_STATUSES, JobStore, is_recoverable_job
 except ImportError:
+    from app.info_cache import InfoCache
+    from app.parse_timing import ParseTiming
+    from app.player_script_cache import PlayerScriptCache
     from app.parse_jobs import ParseJobs, ParseCancelled
     from app import youtube_compat
     from app.hdr_metadata import describe_format, inspect_file
@@ -283,6 +289,10 @@ def require_local_api_token():
     if supplied != API_TOKEN:
         return jsonify({"error": "Unauthorized local API request"}), 403
     return None
+
+
+player_script_cache = PlayerScriptCache()
+player_script_cache.install(app)
 
 
 @app.route("/api/health")
@@ -1363,6 +1373,9 @@ def get_ytdlp_env():
     env.pop("PYTHONPATH", None)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    env.pop('MEDIADROP_PLAYER_CACHE_URL', None)
+    env.pop('MEDIADROP_PLAYER_CACHE_TOKEN', None)
+    env.update(player_script_cache.environment())
     if get_ytdlp_javascript_args():
         env["ELECTRON_RUN_AS_NODE"] = "1"
     configured_proxy = str(load_config().get("proxy_url", "") or "")
@@ -1723,6 +1736,37 @@ def run_ytdlp_download_process(job_id, job, cmd, estimator):
     return proc.returncode, diagnostic_lines
 
 
+media_info_cache = InfoCache()
+
+
+def info_cache_key(url, engine, skip_cookies=False, cfg=None):
+    cfg = load_config() if cfg is None else cfg
+    cookie_file = cfg.get('cookies_file') or ''
+    try:
+        stat = os.stat(cookie_file) if cookie_file else None
+        cookie_stamp = (stat.st_size, stat.st_mtime_ns) if stat else None
+    except OSError:
+        cookie_stamp = None
+    return (get_base_dir(), url, engine, bool(skip_cookies), cfg.get('cookies_browser', ''),
+            cookie_file, cookie_stamp, cfg.get('proxy_url', ''))
+
+
+def cached_download_command(command, url, options, cache_dir):
+    engine = (options or {}).get('youtube_engine')
+    if engine not in ('sabr', 'standard'):
+        return command, None
+    key = info_cache_key(url, engine, (options or {}).get('skip_browser_cookies'))
+    data = media_info_cache.get(key)
+    if data is None:
+        return command, None
+    path = os.path.join(cache_dir, 'source-info.json')
+    # The cache is private and transient, including any signed URLs in the metadata.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'wb') as file:
+        file.write(data)
+    return command[:-1] + ['--load-info-json', path], key
+
+
 def build_download_command(
     job_id,
     job_cache_dir,
@@ -1881,7 +1925,7 @@ def run_download(
         job["resumable"] = False
         failure = None
         returncode = 1
-        attempt_cmd = list(cmd)
+        attempt_cmd, info_key = cached_download_command(list(cmd), url, options, job_cache_dir)
         for attempt in range(1, DOWNLOAD_PROCESS_ATTEMPTS + 1):
             ensure_download_active(job)
             if attempt > 1:
@@ -1896,6 +1940,20 @@ def run_download(
                 job_id, job, attempt_cmd, estimator
             )
             ensure_download_active(job)
+            if info_key is not None and any('trying with URL' in line for line in diagnostic_lines):
+                media_info_cache.discard(info_key)
+            if returncode != 0 and info_key is not None:
+                # A cached URL/session can expire before its TTL. Retry fresh once,
+                # even when the cached failure was not normally retryable.
+                media_info_cache.discard(info_key)
+                info_key = None
+                attempt_cmd = list(cmd)
+                estimator = DownloadProgressEstimator()
+                with jobs_lock:
+                    job['estimator'] = estimator
+                    job['progress'] = empty_progress()
+                returncode, diagnostic_lines = run_ytdlp_download_process(job_id, job, attempt_cmd, estimator)
+                ensure_download_active(job)
             if returncode == 0:
                 failure = None
                 break
@@ -1975,6 +2033,13 @@ def run_download(
                 })
     finally:
         try:
+            if job_cache_dir:
+                try:
+                    os.unlink(os.path.join(job_cache_dir, 'source-info.json'))
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    print(f"[download] Could not remove temporary metadata: {exc}", file=sys.stderr, flush=True)
             if job is not None:
                 with jobs_lock:
                     if shutdown_event.is_set() and job.get("status") in ACTIVE_STATUSES:
@@ -2103,7 +2168,14 @@ def run_info_process(command, **kwargs):
     state = getattr(g, 'parse_state', None)
     if state is None:
         return subprocess.run(command, **kwargs)
-    return info_jobs.run(state, command, env=kwargs.get('env'), timeout=kwargs.get('timeout', 60))
+    timing = ParseTiming('--cookies-from-browser' in command)
+    result = None
+    try:
+        result = info_jobs.run(state, command + ['--verbose'], env=kwargs.get('env'),
+                               timeout=kwargs.get('timeout', 60), on_stderr=timing.observe)
+        return result
+    finally:
+        timing.save(get_base_dir(), result.returncode if result is not None else None)
 
 
 @app.route("/api/info", methods=["POST"])
@@ -2116,6 +2188,7 @@ def get_info():
     if not is_valid_url(url):
         return jsonify({"error": "Invalid URL"}), 400
 
+    initial_config = load_config()
     try:
         cmd, youtube_engine = get_extractor_command(url)
         cmd += ["--no-playlist", "-j"]
@@ -2190,6 +2263,10 @@ def get_info():
             return jsonify({"error": err_detail.split("\n")[-1]}), 400
 
         info = json.loads(result.stdout)
+        if data.get('reuse_info') is True:
+            original_key = info_cache_key(url, youtube_engine, skip_browser_cookies, initial_config)
+            if original_key == info_cache_key(url, youtube_engine, skip_browser_cookies):
+                media_info_cache.put(original_key, info)
     except ParseCancelled:
         raise
     except subprocess.TimeoutExpired:
@@ -2850,6 +2927,7 @@ def serve_application():
     port = int(os.environ.get("PORT", 8899))
     host = os.environ.get("HOST", "127.0.0.1")
     server = make_server(host, port, app, threaded=True)
+    player_script_cache.port = server.server_port if host == '127.0.0.1' else None
     try:
         process_download_queue()
         print(
@@ -2859,6 +2937,7 @@ def serve_application():
         )
         server.serve_forever()
     finally:
+        player_script_cache.port = None
         server.server_close()
 
 

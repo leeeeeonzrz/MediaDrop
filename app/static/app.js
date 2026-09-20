@@ -611,7 +611,7 @@ async function go() {
       const res = await fetch('/api/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, request_id: requestId }),
+        body: JSON.stringify({ url, request_id: requestId, reuse_info: true }),
         signal: controller.signal,
       });
       const data = await res.json();

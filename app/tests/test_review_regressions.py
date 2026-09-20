@@ -61,6 +61,32 @@ class ReviewRegressionTests(unittest.TestCase):
     def run_task(self, job_id="task", **kwargs):
         server.run_download(job_id, "https://example.com/video", "video", None, "Example", **kwargs)
 
+    def test_expired_info_cache_retries_fresh_and_removes_metadata(self):
+        from app.info_cache import InfoCache
+        cache = InfoCache()
+        url = "https://example.com/video"
+        key = server.info_cache_key(url, "sabr")
+        cache.put(key, {"formats": [{"format_id": "video"}]})
+        job = self.task()
+        calls = []
+        def execute(job_id, task, command, estimator):
+            calls.append(list(command))
+            if len(calls) == 1:
+                return 1, ["HTTP Error 403: Forbidden"]
+            pathlib.Path(task['cache_dir'], job_id + '.mp4').write_bytes(b'finished-media')
+            return 0, []
+        with mock.patch.object(server, 'media_info_cache', cache), \
+             mock.patch.object(server, 'build_download_command', return_value=(['engine', url], '.mp4', '')), \
+             mock.patch.object(server, 'run_ytdlp_download_process', side_effect=execute), \
+             mock.patch.object(server, 'inspect_downloaded_video', return_value=None):
+            self.run_task(options={'youtube_engine':'sabr'})
+        self.assertEqual(job['status'], 'done')
+        self.assertEqual(len(calls), 2)
+        self.assertIn('--load-info-json', calls[0])
+        self.assertEqual(calls[1], ['engine', url])
+        self.assertIsNone(cache.get(key))
+        self.assertFalse(pathlib.Path(job['cache_dir'], 'source-info.json').exists())
+
     def test_desktop_listing_keeps_active_tasks_beyond_history_limit(self):
         self.task("old-paused", "paused")["created_at"] = 1
         for index in range(205):

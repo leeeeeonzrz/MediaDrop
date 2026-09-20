@@ -8,27 +8,39 @@ trap 'rm -rf "$CACHE"' EXIT
 mkdir -p "$DEST"
 PLATFORM="${2:-mac}"
 ARCH="${3:-arm64}"
-ASSET=yt-dlp_macos
+ASSET=yt-dlp_macos.zip
 BINARY=yt-dlp-sabr
-SHA=7f0d5099da22e5d6d17b11a57883d58b1701dccebfadc236193d4444652f3648
+SHA=e8cbc3239cf6f95b274051cb2c12a8960268819ff31c54a4a4553e85666855f5
 if [[ "$PLATFORM" == win ]]; then
   BINARY=yt-dlp-sabr.exe
   if [[ "$ARCH" == arm64 ]]; then
-    ASSET=yt-dlp_arm64.exe
-    SHA=a879f282c4b8bb69d361bce9906ae99d5372c07afc38ea4c0fb948c71cbf3c2b
+    ASSET=yt-dlp_win_arm64.zip
+    SHA=f678fd0e3329d40e9904bd8528482815b6caa87a6b6dd9af94a9d9333d853d32
   else
-    ASSET=yt-dlp.exe
-    SHA=b1726090e91705e598db130ddff35e0ef09b7929d064c9c3238bc76a41998bf4
+    ASSET=yt-dlp_win.zip
+    SHA=26acb906275e382f41b4a0e57e081eaa17c9c76ee29039181c991666cdf61b5c
   fi
 fi
 curl -fL --retry 3 "https://github.com/bashonly/yt-dlp/releases/download/sabr/$ASSET" -o "$CACHE/$BINARY"
 python3 -c 'import hashlib,sys; assert hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()==sys.argv[2], "Enhanced engine checksum mismatch"' "$CACHE/$BINARY" "$SHA"
 git clone --depth 1 --branch 2.0.0 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$CACHE/provider"
 (cd "$CACHE/provider/server" && npm ci && npx tsc && npm prune --omit=dev)
-cp "$CACHE/$BINARY" "$DEST/$BINARY"
+# Onedir avoids extracting and validating the Python runtime on every invocation.
+python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$CACHE/$BINARY" "$CACHE/engine"
+ENGINE_NAME=yt-dlp_macos
+if [[ "$PLATFORM" == win ]]; then
+  ENGINE_NAME=yt-dlp.exe
+  [[ "$ARCH" == arm64 ]] && ENGINE_NAME=yt-dlp_arm64.exe
+fi
+cp "$CACHE/engine/$ENGINE_NAME" "$DEST/$BINARY"
+rm -rf "$DEST/_internal"
+cp -R "$CACHE/engine/_internal" "$DEST/_internal"
 chmod +x "$DEST/$BINARY"
 mkdir -p "$DEST/server"
 cp -R "$CACHE/provider/plugin" "$DEST/"
+mkdir -p "$DEST/mediadrop/yt_dlp_plugins/extractor"
+cp "$ROOT_DIR/plugins/mediadrop/yt_dlp_plugins/extractor/mediadrop_player.py" "$DEST/mediadrop/yt_dlp_plugins/extractor/"
+cp "$ROOT_DIR/app/player_cache_policy.py" "$DEST/mediadrop/yt_dlp_plugins/extractor/_mediadrop_policy.py"
 cp -R "$CACHE/provider/server/build" "$CACHE/provider/server/node_modules" "$CACHE/provider/server/package.json" "$DEST/server/"
 cp "$CACHE/provider/LICENSE" "$DEST/LICENSE-bgutil"
 python3 "$ROOT_DIR/scripts/patch-youtube-provider.py" "$DEST"
