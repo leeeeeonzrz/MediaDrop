@@ -1,6 +1,7 @@
 const {
   appendBoundedText,
   compareVersions,
+  ensureSingleInstance,
   getDevelopmentPythonCandidates,
   isSafeExternalUrl,
   isSupportedProxyUrl,
@@ -12,7 +13,7 @@ const {
 } = require("../electron-utils");
 const { adHocSignApp } = require("./adhoc-sign");
 const { verifyMacAppSignature } = require("./verify-bundle");
-const { detectExecutableArchitecture, hasListedCapability } = require("./verify-ffmpeg");
+const { detectExecutableArchitecture, hasListedCapability, hasEncoder } = require("./verify-ffmpeg");
 const fs = require("fs");
 const path = require("path");
 
@@ -45,6 +46,9 @@ assert(appendBoundedText("abc", "def", 0) === "", "Disabled server log buffer re
 assert(parseServerReadyPort("[startup] MEDIADROP_READY 127.0.0.1:49152") === 49152, "Server ready port was not parsed");
 assert(parseServerReadyPort("[startup] MEDIADROP_READY 0.0.0.0:49152") === null, "Non-loopback server marker was accepted");
 assert(parseServerReadyPort("[startup] MEDIADROP_READY 127.0.0.1:70000") === null, "Invalid server port was accepted");
+assert(hasEncoder(" V....D png  PNG image", "png"), "PNG encoder was not detected");
+assert(hasEncoder(" A....D libmp3lame  MP3", "libmp3lame"), "MP3 encoder was not detected");
+assert(!hasEncoder(" V....D apng  Animated PNG", "png"), "APNG was mistaken for the PNG encoder");
 
 const assets = [
   { name: "MediaDrop-1.1.0-arm64.dmg", browser_download_url: "https://example.com/mac" },
@@ -62,11 +66,30 @@ assert(hasListedCapability(" V..... libx264  H.264 encoder", "libx264"), "Exact 
 assert(!hasListedCapability(" V..... libx264rgb  H.264 encoder", "libx264"), "Partial FFmpeg encoder name was accepted");
 assert(!hasListedCapability(" ... subtitles V->V", "ass"), "One subtitle filter incorrectly satisfied another filter check");
 
+let secondaryQuit = false;
+assert(!ensureSingleInstance({
+  requestSingleInstanceLock: () => false,
+  quit: () => { secondaryQuit = true; },
+}, () => null), "Secondary instance was allowed to start");
+assert(secondaryQuit, "Secondary instance was not closed");
+let secondInstance;
+const focusActions = [];
+assert(ensureSingleInstance({
+  requestSingleInstanceLock: () => true,
+  on: (event, callback) => { if (event === "second-instance") secondInstance = callback; },
+}, () => ({
+  isDestroyed: () => false, isMinimized: () => true,
+  restore: () => focusActions.push("restore"), show: () => focusActions.push("show"),
+  focus: () => focusActions.push("focus"),
+})), "Primary instance was rejected");
+secondInstance();
+assert(focusActions.join(",") === "restore,show,focus", "Existing window was not restored and focused");
+
 const packageConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
 assert(packageConfig.engines.node === ">=22.12.0", "Node runtime requirement is not pinned");
 assert(packageConfig.devDependencies.electron === "41.10.3", "Electron version is not pinned");
 assert(packageConfig.devDependencies["electron-builder"] === "26.15.3", "electron-builder version is not pinned");
-assert(packageConfig.version === "1.1.4-windows.1", "Windows fork release version is not pinned");
+assert(packageConfig.version === "1.3.1-windows.1", "Windows fork release version is not pinned");
 assert(!packageConfig.build.files.some((entry) => entry.startsWith("app/")), "Web source leaked into Electron app.asar");
 assert(!packageConfig.build.extraResources.some((entry) => entry.to === "app"), "Web resources were packaged twice");
 assert(packageConfig.build.extraResources.some((entry) => entry.to === "bin"), "Bundled runtime binaries are missing");
@@ -78,6 +101,7 @@ const flaskSource = fs.readFileSync(path.join(__dirname, "..", "app", "app.py"),
 assert(!flaskSource.includes("'unsafe-inline'"), "Content security policy still allows inline code");
 assert(flaskSource.includes("script-src 'self';") && flaskSource.includes("style-src 'self';"), "Strict local script and style policy is missing");
 const mainSource = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+assert(mainSource.includes("if (!isPrimaryInstance) return;"), "Secondary instance can still start a backend");
 assert(mainSource.includes("MEDIADROP_JS_RUNTIME: process.execPath"), "Electron is not exposed as yt-dlp's JavaScript runtime");
 assert(flaskSource.includes('"ELECTRON_RUN_AS_NODE"'), "yt-dlp JavaScript runtime mode is not enabled");
 assert(flaskSource.includes('"--js-runtimes"'), "yt-dlp commands do not receive the JavaScript runtime");
@@ -89,22 +113,14 @@ assert(buildWorkflow.includes("node-version: 22"), "Release workflow does not us
 assert(buildWorkflow.includes("pip install -r app/requirements-build.txt"), "Release workflow does not use pinned Python build dependencies");
 assert(!buildWorkflow.includes("pip install flask pyinstaller"), "Release workflow still installs moving Python build dependencies");
 assert(buildWorkflow.includes("FFMPEG_VERSION: '8.1.2'"), "Release workflow FFmpeg version is not pinned");
-assert(buildWorkflow.includes("YTDLP_REPOSITORY: 'yt-dlp/yt-dlp-nightly-builds'"), "Release workflow does not use the verified yt-dlp nightly repository");
-assert(buildWorkflow.includes("YTDLP_VERSION: '2026.08.18.122307'"), "Release workflow yt-dlp nightly version is not pinned");
-for (const checksum of [
-  "652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9",
-  "147e9dd6f0684bfa533461c84827fa0a1f1a5ed79ce5d2085df1d3c362b2d666",
-  "46d572488acb4b57f2b34ef05645ae56d0071b00e1f0d33a756502b62ae08822",
-]) {
-  assert(buildWorkflow.includes(checksum), `Pinned yt-dlp nightly checksum is missing: ${checksum}`);
-}
+assert(buildWorkflow.includes("YTDLP_VERSION: '2026.08.19'"), "Release workflow yt-dlp version is not pinned");
 assert(!buildWorkflow.includes("ffmpeg-master-latest"), "Release workflow still uses a moving FFmpeg master build");
-assert(buildWorkflow.includes("FFMPEG_WINDOWS_RELEASE: 'autobuild-2026-08-17-13-05'"), "Windows FFmpeg release is not immutable");
+assert(/FFMPEG_WINDOWS_RELEASE: 'autobuild-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}'/.test(buildWorkflow), "Windows FFmpeg release must be dated");
 assert(!buildWorkflow.includes("releases/download/latest/${ASSET}"), "Windows FFmpeg download still uses a moving release");
-assert(buildWorkflow.includes("ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip"), "Windows x64 FFmpeg asset is missing");
-assert(buildWorkflow.includes("ffmpeg-n8.1.2-44-g7c533d0f86-winarm64-gpl-8.1.zip"), "Windows ARM64 FFmpeg asset is missing");
-assert(buildWorkflow.includes("19b9b43e6df8839473ba22c8e22bf14b937c1e2ca40ecbd19d58afedc83ac908"), "Windows x64 FFmpeg checksum is missing");
-assert(buildWorkflow.includes("bedbdfaf298650e9fc25f35c14e948db37b969d7a3bf973e7b6861ef62444031"), "Windows ARM64 FFmpeg checksum is missing");
+for (const arch of ["win64", "winarm64"]) {
+  const pinnedAsset = new RegExp(`ffmpeg_asset: ffmpeg-n8\\.1\\.2-\\d+-g[0-9a-f]+-${arch}-gpl-8\\.1\\.zip\\s+ffmpeg_sha256: [0-9a-f]{64}`);
+  assert(pinnedAsset.test(buildWorkflow), `${arch} must pin a versioned FFmpeg asset and SHA-256`);
+}
 assert(buildWorkflow.includes("Roboto-OFL.txt"), "Release builds no longer verify the Roboto license");
 assert(buildWorkflow.includes("NotoSansCJK-OFL.txt"), "Release builds no longer verify the Noto license");
 const preloadSource = fs.readFileSync(path.join(__dirname, "..", "preload.js"), "utf8");
@@ -142,10 +158,16 @@ for (const configureFlag of [
 ]) {
   assert(macFfmpegBuild.includes(configureFlag), `macOS FFmpeg capability is not enabled: ${configureFlag}`);
 }
-assert(macFfmpegBuild.includes('BINARY_CACHE_SCHEMA="hard-subtitles-v2"'), "macOS FFmpeg cache schema was not bumped");
+assert(macFfmpegBuild.includes('BINARY_CACHE_SCHEMA="hard-subtitles-v3"'), "macOS FFmpeg cache schema was not bumped");
 assert(macFfmpegBuild.includes("validate_smoke_transcodes"), "macOS FFmpeg build lacks hard-subtitle smoke transcodes");
 assert(macFfmpegBuild.includes("LC_RPATH"), "macOS FFmpeg build does not reject third-party runtime search paths");
 assert(buildWorkflow.includes("for ENCODER in ass aac libmp3lame libopus libx264 libvpx-vp9"), "Release builds do not independently verify every subtitle encoder");
+assert(macFfmpegBuild.includes("--enable-libmp3lame"), "macOS FFmpeg build does not enable MP3 encoding");
+assert(macFfmpegBuild.includes("--enable-zlib"), "macOS FFmpeg build does not enable PNG encoding support");
+assert(macFfmpegBuild.includes("hard-subtitles-v3"), "macOS FFmpeg cache was not invalidated after adding FFprobe");
+assert(macFfmpegBuild.includes("--enable-ffprobe") && !macFfmpegBuild.includes("--disable-ffprobe"), "macOS build does not include FFprobe");
+assert(macFfmpegBuild.includes('cp ffprobe "$BINARY_CACHE/ffprobe"'), "FFprobe is missing from the macOS binary cache");
+assert(buildWorkflow.includes("cp bundled-ffmpeg/*/bin/ffprobe.exe bundled-bin/ffprobe.exe"), "Windows build does not include FFprobe");
 assert(buildWorkflow.includes("verify-ffmpeg.js bundled-bin/ffmpeg.exe"), "Windows FFmpeg architecture verification is missing");
 assert(buildWorkflow.includes("npm run verify:mac"), "macOS release artifacts are not verified before upload");
 
@@ -180,10 +202,8 @@ assert(localMacBuild.includes("requirements-build.txt") && localMacBuild.include
 assert(localMacBuild.includes("verify-bundle.js") && localMacBuild.includes("hdiutil verify"), "Local macOS artifacts are not fully verified");
 const localBinaryBuild = fs.readFileSync(path.join(__dirname, "build-bin.sh"), "utf8");
 assert(localBinaryBuild.includes('PYTHON_BIN="${PYTHON_BIN:-python3}"'), "Local binary build cannot use the pinned build environment");
-assert(localBinaryBuild.includes('YTDLP_REPOSITORY="yt-dlp/yt-dlp-nightly-builds"'), "Local binary build does not use the verified yt-dlp nightly repository");
-assert(localBinaryBuild.includes('YTDLP_VERSION="2026.08.18.122307"'), "Local binary build yt-dlp nightly version is not pinned");
-assert(localBinaryBuild.includes("46d572488acb4b57f2b34ef05645ae56d0071b00e1f0d33a756502b62ae08822"), "Local binary build yt-dlp checksum is not pinned");
-
+assert(localBinaryBuild.includes("SHA2-256SUMS") && localBinaryBuild.includes("shasum -a 256 -c -"), "Local yt-dlp download is not checksum verified");
+assert(localBinaryBuild.includes('"$actual_ytdlp_version" != "$YTDLP_VERSION"'), "Local yt-dlp version is not verified");
 const ffmpegVerifier = fs.readFileSync(path.join(__dirname, "verify-ffmpeg.js"), "utf8");
 for (const capability of ["ass", "aac", "libmp3lame", "libopus", "libx264", "libvpx-vp9", "h264_videotoolbox", "subtitles"]) {
   assert(ffmpegVerifier.includes(`\"${capability}\"`), `Bundled FFmpeg verifier is missing ${capability}`);
@@ -192,7 +212,7 @@ for (const capability of ["ass", "aac", "libmp3lame", "libopus", "libx264", "lib
 const runtimeRequirements = fs.readFileSync(path.join(__dirname, "..", "app", "requirements.txt"), "utf8");
 const buildRequirements = fs.readFileSync(path.join(__dirname, "..", "app", "requirements-build.txt"), "utf8");
 assert(runtimeRequirements.includes("Flask==3.1.3"), "Flask runtime version is not pinned");
-assert(runtimeRequirements.includes("yt-dlp==2026.7.4"), "yt-dlp runtime version is not pinned");
+assert(runtimeRequirements.includes("yt-dlp==2026.8.19"), "yt-dlp runtime version is not pinned");
 assert(buildRequirements.includes("PyInstaller==6.21.0"), "PyInstaller build version is not pinned");
 
 const fakePe = Buffer.alloc(256);
@@ -209,3 +229,19 @@ try {
 }
 
 console.log("electron utility checks OK");
+
+const certificateCalls = [];
+adHocSignApp('/tmp/MediaDrop.app', (exe,args)=>certificateCalls.push([exe,args]), 'test-signing-identity');
+assert(certificateCalls.some(([exe,args])=>exe==='/usr/bin/codesign' && args.includes('test-signing-identity')), 'Configured signing identity must be used');
+
+const strictAssert = require('node:assert/strict');
+const {releaseSigningConfig} = require('./adhoc-sign');
+strictAssert.throws(()=>releaseSigningConfig({}), /stable macOS signing/);
+strictAssert.throws(()=>releaseSigningConfig({MEDIADROP_SIGNING_IDENTITY:'-'}), /stable macOS signing/);
+strictAssert.throws(()=>releaseSigningConfig({CI:'true',MEDIADROP_SIGNING_IDENTITY:'certificate'}), /SIGNING_REQUIREMENT/);
+strictAssert.equal(releaseSigningConfig({}, {identity:'local-certificate'}).identity,'local-certificate');
+const releaseIdentity = releaseSigningConfig({CI:'true',MEDIADROP_SIGNING_IDENTITY:'certificate',MEDIADROP_SIGNING_REQUIREMENT:'identifier "com.mediadrop.desktop"'});
+const verifiedCalls=[];
+adHocSignApp('/tmp/test-release.app',(exe,args)=>verifiedCalls.push(args), releaseIdentity.identity, releaseIdentity.requirement);
+assert(verifiedCalls.some(args=>args.includes('-R') && args.includes(`=${releaseIdentity.requirement}`)));
+console.log('OK release signing fails closed and checks expected identity');

@@ -1,11 +1,9 @@
 name: Build & Release
 
 env:
-  YTDLP_REPOSITORY: 'yt-dlp/yt-dlp-nightly-builds'
-  YTDLP_VERSION: '2026.08.18.122307'
-  YTDLP_MACOS_SHA256: '46d572488acb4b57f2b34ef05645ae56d0071b00e1f0d33a756502b62ae08822'
+  YTDLP_VERSION: '2026.08.19'
   FFMPEG_VERSION: '8.1.2'
-  FFMPEG_WINDOWS_RELEASE: 'autobuild-2026-08-17-13-05'
+  FFMPEG_WINDOWS_RELEASE: 'autobuild-2026-09-20-13-11'
 
 on:
   push:
@@ -14,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: '替换哪个 Release 的安装包（如 V1.0.0）'
+        description: '目标草稿 Release（如 V1.2.0）'
         required: true
       platforms:
         description: '构建哪些平台'
@@ -52,9 +50,34 @@ jobs:
       (github.event.inputs.platforms == 'all' ||
       github.event.inputs.platforms == 'mac')
     runs-on: macos-latest
+    env:
+      MEDIADROP_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MEDIADROP_SIGNING_REQUIREMENT: ${{ secrets.MACOS_SIGNING_REQUIREMENT }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Import stable signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CERTIFICATE_BASE64:?Configure the existing signing certificate before publishing}"
+          : "${MEDIADROP_SIGNING_IDENTITY:?Missing signing identity}"
+          : "${MEDIADROP_SIGNING_REQUIREMENT:?Missing expected designated requirement}"
+          CERT_PATH="$RUNNER_TEMP/mediadrop-signing.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/mediadrop-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERTIFICATE_PASSWORD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          rm -f "$CERT_PATH"
 
       - uses: actions/setup-node@v4
         with:
@@ -113,6 +136,11 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Prepare native glass and YouTube engine
+        run: |
+          npm run build:glass
+          bash scripts/prepare-youtube.sh
+
       - name: Build macOS DMG
         run: npx electron-builder --mac --arm64
 
@@ -126,6 +154,13 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
+      - name: Remove signing keychain
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/mediadrop-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/mediadrop-signing.p12"
+
   build-win:
     needs: test
     if: >-
@@ -137,14 +172,12 @@ jobs:
         include:
           - arch: x64
             runner: windows-latest
-            ytdlp_sha256: 652e154bce7170070d0f26415c9a3c35c121f5a7903cb8cde6d31c4577517fb9
-            ffmpeg_asset: ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip
-            ffmpeg_sha256: 19b9b43e6df8839473ba22c8e22bf14b937c1e2ca40ecbd19d58afedc83ac908
+            ffmpeg_asset: ffmpeg-n8.1.2-267-gb2f422d306-win64-gpl-8.1.zip
+            ffmpeg_sha256: 66945d35abe59eafba7ebe20c1340adee816302820d89dfe64b739e8d9a8157b
           - arch: arm64
             runner: windows-11-arm
-            ytdlp_sha256: 147e9dd6f0684bfa533461c84827fa0a1f1a5ed79ce5d2085df1d3c362b2d666
-            ffmpeg_asset: ffmpeg-n8.1.2-44-g7c533d0f86-winarm64-gpl-8.1.zip
-            ffmpeg_sha256: bedbdfaf298650e9fc25f35c14e948db37b969d7a3bf973e7b6861ef62444031
+            ffmpeg_asset: ffmpeg-n8.1.2-267-gb2f422d306-winarm64-gpl-8.1.zip
+            ffmpeg_sha256: 7570ccdd56466f77132614820d1bee0df0a534633129496e70a345fafd4928cd
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -152,7 +185,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.22.0'
+          architecture: x64
 
       - uses: actions/setup-python@v5
         with:
@@ -187,6 +221,7 @@ jobs:
           printf '%s  %s\n' '${{ matrix.ffmpeg_sha256 }}' ffmpeg.zip | sha256sum -c -
           7z x ffmpeg.zip -obundled-ffmpeg
           cp bundled-ffmpeg/*/bin/ffmpeg.exe bundled-bin/ffmpeg.exe
+          cp bundled-ffmpeg/*/bin/ffprobe.exe bundled-bin/ffprobe.exe
 
       - name: Verify native download tools
         shell: bash
@@ -219,6 +254,16 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Prepare YouTube enhanced engine
+        shell: bash
+        run: bash scripts/prepare-youtube.sh "$PWD/bundled-bin/youtube" win "${{ matrix.arch }}"
+
+      - name: Verify enhanced engine and token provider
+        shell: bash
+        run: |
+          bundled-bin/youtube/yt-dlp-sabr.exe --version
+          node scripts/test-bundled-provider.js bundled-bin/youtube
 
       - name: Build Windows EXE
         run: npx electron-builder --win --${{ matrix.arch }}
@@ -266,5 +311,6 @@ jobs:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
           name: ${{ github.event.inputs.release_tag || github.ref_name }}
           body_path: release-notes.md
+          draft: true
           overwrite_files: true
           files: artifacts/**/*

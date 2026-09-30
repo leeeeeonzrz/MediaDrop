@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_PATH="${1:-$ROOT_DIR/bundled-bin/ffmpeg}"
+PROBE_OUTPUT_PATH="$(dirname "$OUTPUT_PATH")/ffprobe"
 FFMPEG_VERSION="8.1.2"
 FFMPEG_ARCHIVE="ffmpeg-n${FFMPEG_VERSION}.tar.gz"
 FFMPEG_SOURCE_DIR="FFmpeg-n${FFMPEG_VERSION}"
@@ -60,7 +61,7 @@ LIBVPX_SHA256="7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c"
 SOURCE_CACHE="${MEDIADROP_FFMPEG_SOURCE_CACHE:-$ROOT_DIR/build/ffmpeg-sources}"
 # Bump this schema whenever the required codec/filter set changes so an older,
 # less capable binary cannot be reused merely because its FFmpeg version matches.
-BINARY_CACHE_SCHEMA="hard-subtitles-v2"
+BINARY_CACHE_SCHEMA="hard-subtitles-v3"
 BINARY_CACHE="${MEDIADROP_FFMPEG_BINARY_CACHE:-$ROOT_DIR/build/ffmpeg-${FFMPEG_VERSION}-macos-arm64-${BINARY_CACHE_SCHEMA}}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 export MACOSX_DEPLOYMENT_TARGET
@@ -146,6 +147,7 @@ EOF
 
 validate_binary() {
   local binary="$1"
+  local tool="${2:-ffmpeg}"
   local version_output
   local encoder_output
   local filter_output
@@ -155,15 +157,17 @@ validate_binary() {
   [[ -x "$binary" ]] || return 1
   file "$binary" | grep -q 'arm64' || return 1
   version_output="$("$binary" -version 2>&1)" || return 1
-  printf '%s\n' "$version_output" | sed -n '1p' | grep -Eq "ffmpeg version n?${FFMPEG_VERSION}([ .-]|$)" || return 1
-  encoder_output="$("$binary" -hide_banner -encoders 2>&1)" || return 1
-  for capability in ass aac libmp3lame libopus libx264 libvpx-vp9 h264_videotoolbox; do
-    has_listed_capability "$encoder_output" "$capability" || return 1
-  done
-  filter_output="$("$binary" -hide_banner -filters 2>&1)" || return 1
-  for capability in ass subtitles; do
-    has_listed_capability "$filter_output" "$capability" || return 1
-  done
+  printf '%s\n' "$version_output" | sed -n '1p' | grep -Eq "${tool} version n?${FFMPEG_VERSION}([ .-]|$)" || return 1
+  if [[ "$tool" == "ffmpeg" ]]; then
+    encoder_output="$("$binary" -hide_banner -encoders 2>&1)" || return 1
+    for capability in png ass aac libmp3lame libopus libx264 libvpx-vp9 h264_videotoolbox; do
+      has_listed_capability "$encoder_output" "$capability" || return 1
+    done
+    filter_output="$("$binary" -hide_banner -filters 2>&1)" || return 1
+    for capability in ass subtitles; do
+      has_listed_capability "$filter_output" "$capability" || return 1
+    done
+  fi
   binary_minos="$(vtool -show-build "$binary" 2>/dev/null | awk '$1 == "minos" { print $2; exit }')"
   [[ "$binary_minos" == "$MACOSX_DEPLOYMENT_TARGET" ]] || return 1
 
@@ -177,15 +181,18 @@ validate_binary() {
     return 1
   fi
 
-  validate_smoke_transcodes "$binary"
+  if [[ "$tool" == "ffmpeg" ]]; then
+    validate_smoke_transcodes "$binary"
+  fi
 }
 
 mkdir -p "$SOURCE_CACHE" "$BINARY_CACHE" "$(dirname "$OUTPUT_PATH")"
 
-if validate_binary "$BINARY_CACHE/ffmpeg"; then
+if validate_binary "$BINARY_CACHE/ffmpeg" && validate_binary "$BINARY_CACHE/ffprobe" ffprobe; then
   cp "$BINARY_CACHE/ffmpeg" "$OUTPUT_PATH"
-  chmod +x "$OUTPUT_PATH"
-  echo "Using cached FFmpeg ${FFMPEG_VERSION} build with hard-subtitle support."
+  cp "$BINARY_CACHE/ffprobe" "$PROBE_OUTPUT_PATH"
+  chmod +x "$OUTPUT_PATH" "$PROBE_OUTPUT_PATH"
+  echo "Using cached FFmpeg ${FFMPEG_VERSION} build."
   exit 0
 fi
 
@@ -346,7 +353,7 @@ tar -xf "$SOURCE_CACHE/$FFMPEG_ARCHIVE" -C "$WORK_DIR"
     --disable-debug \
     --disable-doc \
     --disable-ffplay \
-    --disable-ffprobe \
+    --enable-ffprobe \
     --disable-shared \
     --enable-static \
     --enable-gpl \
@@ -357,19 +364,23 @@ tar -xf "$SOURCE_CACHE/$FFMPEG_ARCHIVE" -C "$WORK_DIR"
     --enable-libx264 \
     --enable-pthreads \
     --enable-securetransport \
+    --enable-zlib \
     --enable-videotoolbox \
     --pkg-config-flags=--static \
     --extra-cflags="$COMMON_CFLAGS" \
     --extra-ldflags="$COMMON_LDFLAGS" \
     --extra-libs=-lc++
-  make -j "$JOBS" ffmpeg
+  make -j "$JOBS" ffmpeg ffprobe
   cp ffmpeg "$BINARY_CACHE/ffmpeg"
+  cp ffprobe "$BINARY_CACHE/ffprobe"
 )
 
-chmod +x "$BINARY_CACHE/ffmpeg"
-strip "$BINARY_CACHE/ffmpeg"
+chmod +x "$BINARY_CACHE/ffmpeg" "$BINARY_CACHE/ffprobe"
+strip "$BINARY_CACHE/ffmpeg" "$BINARY_CACHE/ffprobe"
 validate_binary "$BINARY_CACHE/ffmpeg"
+validate_binary "$BINARY_CACHE/ffprobe" ffprobe
 cp "$BINARY_CACHE/ffmpeg" "$OUTPUT_PATH"
-chmod +x "$OUTPUT_PATH"
+cp "$BINARY_CACHE/ffprobe" "$PROBE_OUTPUT_PATH"
+chmod +x "$OUTPUT_PATH" "$PROBE_OUTPUT_PATH"
 
 echo "Built FFmpeg ${FFMPEG_VERSION} for macOS ARM64 with hard-subtitle support."

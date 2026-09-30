@@ -2,7 +2,7 @@ const assert = require("assert");
 
 async function connect(port) {
   const targets = await fetch(`http://127.0.0.1:${port}/json`).then((response) => response.json());
-  const page = targets.find((target) => target.type === "page" && target.url.startsWith("http://127.0.0.1:"));
+  const page = targets.find((target) => target.type === "page" && target.url.startsWith("http://127.0.0.1:") && !target.url.includes("settings"));
   assert(page?.webSocketDebuggerUrl, "MediaDrop renderer target not found");
   const socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
@@ -55,7 +55,7 @@ async function main() {
       body: JSON.stringify({
         url: ${JSON.stringify(url)}, format: 'video', format_id: ${JSON.stringify(format.id)},
         video_range_mode: 'auto', preset: 'custom',
-        options: { container: 'mp4', subtitle_mode: 'none' },
+        options: { container: 'mp4', subtitle_mode: 'none', youtube_engine: ${JSON.stringify(info.body.youtube_engine || 'standard')}, skip_browser_cookies: ${JSON.stringify(Boolean(info.body.skip_browser_cookies))} },
         title: ${JSON.stringify(info.body.title || "")},
       }),
     });

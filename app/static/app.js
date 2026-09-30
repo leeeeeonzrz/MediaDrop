@@ -1,5 +1,10 @@
+function uiIcon(name) {
+  return `<svg class="ui-icon" aria-hidden="true"><use href="/static/icons.svg#${name}"></use></svg>`;
+}
+
 let cardData = [];
 let parseController = null;
+const parseRequestIds = new Set();
 let taskRefreshTimer = null;
 const notifiedJobs = new Set();
 
@@ -10,16 +15,21 @@ let currentAppUpdateState = null;
 let dismissedAppUpdateVersion = null;
 let currentYtdlpVersion = null;
 
-function openSettings() {
+function openSettings(tab) {
+  if (window.electronAPI?.openSettings && !new URLSearchParams(location.search).has("settings")) { window.electronAPI.openSettings(tab); return; }
+  document.getElementById("settingsDrawer").inert = false;
   document.getElementById('settingsDrawer').classList.add('open');
   document.getElementById('settingsBackdrop').classList.add('open');
   document.getElementById('settingsDrawer').setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawer-open');
+  if (tab) window.mediaWorkspace?.settingsTab(tab);
   if (!settingsLoaded) loadSettings();
   setTimeout(() => document.querySelector('#settingsDrawer .icon-btn').focus(), 50);
 }
 
 function closeSettings() {
+  if (new URLSearchParams(location.search).has("settings")) { if (window.electronAPI?.closeSettings) void window.electronAPI.closeSettings(); else window.close(); return; }
+  document.getElementById("settingsDrawer").inert = true;
   document.getElementById('settingsDrawer').classList.remove('open');
   document.getElementById('settingsBackdrop').classList.remove('open');
   document.getElementById('settingsDrawer').setAttribute('aria-hidden', 'true');
@@ -28,7 +38,9 @@ function closeSettings() {
 }
 
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && document.getElementById('settingsDrawer').classList.contains('open')) {
+  const closeShortcut = new URLSearchParams(location.search).has('settings') && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'w';
+  if ((event.key === 'Escape' || closeShortcut) && document.getElementById('settingsDrawer').classList.contains('open')) {
+    event.preventDefault();
     closeSettings();
   }
 });
@@ -45,12 +57,17 @@ async function loadSettings() {
     const data = await res.json();
     document.getElementById('dlPath').value = data.download_dir || '';
     document.getElementById('proxyUrl').value = data.proxy_url || '';
+    const youtubeMode = document.getElementById('youtubeMode');
+    if (youtubeMode) youtubeMode.value = data.youtube_enhanced ? 'enhanced' : 'standard';
     document.getElementById('cookiesBrowser').value = data.cookies_browser || 'chrome';
     document.getElementById('cookiesFile').value = data.cookies_file || '';
     document.getElementById('maxConcurrent').value = String(data.max_concurrent || 2);
     document.getElementById('authMode').value = data.cookies_file ? 'file' : data.cookies_browser ? 'browser' : 'none';
     updateAuthFields();
     settingsLoaded = true;
+    window.mediaWorkspace?.setFolder(data.download_dir);
+    window.mediaWorkspace?.applyPreferences(data);
+    void loadEngineStatus();
   } catch (err) {
     setSettingsMsg('err', `无法加载设置：${friendlyError(err.message)}`);
   }
@@ -106,6 +123,7 @@ async function changeAuthMode() {
   if (mode === 'none') {
     await postConfig({ cookies_browser: '', cookies_file: '' }, '已停用 YouTube Cookie');
   } else if (mode === 'browser') {
+    await window.electronAPI?.requestBrowserAccess?.(document.getElementById('cookiesBrowser').value || 'chrome');
     await postConfig({ cookies_browser: document.getElementById('cookiesBrowser').value || 'chrome', cookies_file: '' }, '已启用浏览器 Cookie');
   } else {
     await postConfig({ cookies_browser: '' }, '已启用 cookies.txt 认证');
@@ -114,6 +132,7 @@ async function changeAuthMode() {
 
 async function saveCookies() {
   const browser = document.getElementById('cookiesBrowser').value;
+  await window.electronAPI?.requestBrowserAccess?.(browser);
   await postConfig({ cookies_browser: browser, cookies_file: '' }, `已选择 ${browser} Cookie`);
 }
 
@@ -332,6 +351,18 @@ function refreshYtdlpInstallButton() {
     : '安装所选版本';
 }
 
+async function loadEngineStatus() {
+  const output = document.getElementById('youtubeEngineVersion');
+  if (!output) return;
+  try {
+    const res = await fetch('/api/engines');
+    if (!res.ok) throw new Error('engine status');
+    const { youtube } = await res.json();
+    output.textContent = youtube.available ? `${youtube.version || '版本未知'}${youtube.mode === 'sabr' ? ' · 使用中' : ' · 未启用'}` : '未安装';
+    document.getElementById('youtubeEngineUpdate').hidden = !window.electronAPI;
+  } catch { output.textContent = '暂时无法读取'; }
+}
+
 async function checkYtdlp() {
   const version = document.getElementById('ytdlpVersion');
   const channel = document.getElementById('ytdlpChannel').value;
@@ -487,6 +518,7 @@ function progressPhaseLabel(phase, progress = {}) {
       : '正在使用 CPU 将字幕烧录到视频画面',
     postprocessing: '正在处理媒体',
     complete: '处理完成',
+    verifying: '正在核验媒体',
   };
   return labels[phase] || '';
 }
@@ -570,7 +602,7 @@ function buildDownloadRequest(card, format = card.format || 'video') {
       source_is_hdr: Boolean(selectedFormat?.hdr),
       metadata: Boolean(options.metadata),
       chapters: Boolean(options.chapters),
-      embed_thumbnail: Boolean(options.embed_thumbnail),
+      embed_thumbnail: options.container !== 'webm' && Boolean(options.embed_thumbnail),
     };
   } else if (format === 'audio') {
     requestOptions = {
@@ -627,7 +659,7 @@ function attr(s) {
 function safeMediaUrl(value) {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? attr(url.href) : '';
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
   } catch {
     return '';
   }
@@ -635,6 +667,11 @@ function safeMediaUrl(value) {
 
 function friendlyError(err) {
   err = String(err || '未知错误');
+  if (err.includes('WebM does not support embedded thumbnails')) return 'WebM 不支持嵌入封面，请选择 MP4 或 MKV';
+  if (err.includes('Compatibility mode requires')) return '兼容模式需要使用 MP4 或 MKV';
+  if (err.includes('FFprobe is required')) return '缺少 FFprobe 组件，请重新安装完整应用';
+  if (err.includes('Task has already finished')) return '任务已经完成，正在刷新状态';
+  if (err.includes('Task is still finishing')) return '任务正在完成清理，请稍后重试';
   if (err.includes('Unsupported URL')) return '暂不支持此链接';
   if (err.includes('Video unavailable') || err.includes('not available')) return '视频不可用或属于私密内容';
   if (err.includes('Private video')) return '这是一个私密视频';
@@ -645,7 +682,11 @@ function friendlyError(err) {
   if (err.includes('HTTP Error 404')) return '未找到该视频';
   if (err.includes('Sign in to confirm')) return 'YouTube 需要登录认证，请在设置中选择已登录的浏览器或 cookies.txt';
   if (err.includes('Operation not permitted') && err.includes('Safari')) return '暂不支持 Safari，请登录 Chrome 或 Firefox 后在设置中选择对应浏览器';
-  if (err.toLowerCase().includes('cookie')) return '浏览器 Cookie 无法读取或已失效；请彻底关闭浏览器后重试，或改用 Firefox / cookies.txt';
+  if (err.includes('MACOS_BROWSER_ACCESS_DENIED')) return 'macOS 已阻止访问浏览器数据。请到系统设置 → 隐私与安全 → 文件与文件夹 → MediaDrop，开启对应浏览器权限；无需重新登录。';
+  if (err.includes('BROWSER_KEYCHAIN_FAILED')) return '无法解密浏览器 Cookie。请允许下载组件访问 Chrome Safe Storage 等浏览器钥匙串项目，然后重新解析。';
+  if (err.includes('BROWSER_PROFILE_MISSING')) return '未找到所选浏览器的 Cookie 数据库，请确认使用的是已登录的浏览器及其配置目录。';
+  if (err.includes('BROWSER_DATABASE_LOCKED')) return '浏览器 Cookie 数据库被占用，请完全退出所选浏览器后重试。';
+  if (err.toLowerCase().includes('cookie')) return '无法读取浏览器 Cookie。请在设置中检查浏览器数据访问权限或选择 cookies.txt；此错误不代表登录已失效。';
   if (err.toLowerCase().includes('copyright')) return '视频因版权限制而无法下载';
   if (err.toLowerCase().includes('geo')) return '当前地区无法播放此视频';
   if (err.includes('timed out') || err.includes('Timed out')) return '请求超时，请重试';
@@ -696,37 +737,73 @@ function friendlyError(err) {
 }
 
 document.getElementById('urls').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); }
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); go(); }
 });
+
+function stopCardPolling(card) {
+  if (card._pollInterval != null) clearTimeout(card._pollInterval);
+  card._pollInterval = null;
+  card._pollController?.abort();
+  card._pollController = null;
+  card._pollGeneration = (card._pollGeneration || 0) + 1;
+}
+
+function isCurrentCardAttempt(idx, card, attempt) {
+  return cardData[idx] === card && card._downloadAttempt === attempt;
+}
+
+function isWebmFormat(format) {
+  return /^(vp8|vp9|vp08|vp09|av01|av1)/i.test(format.vcodec || '')
+    && (!format.acodec || format.acodec === 'none' || /^(opus|vorbis)/i.test(format.acodec));
+}
 
 async function go() {
   if (parseController) {
-    parseController.abort();
+    const controller = parseController;
+    if (controller.cancelling) return;
+    controller.cancelling = true;
+    document.getElementById('goBtn').textContent = '正在取消…';
+    controller.cancelPromise = (async () => { try {
+      await Promise.all([...parseRequestIds].map(async id => {
+        const response = await fetch(`/api/info/${encodeURIComponent(id)}/cancel`, {method:'POST'});
+        if (!response.ok) throw new Error('无法停止后台解析，请重试取消');
+      }));
+      controller.abort();
+    } catch (error) {
+      window.mediaWorkspace?.message(error.message);
+      document.getElementById('goBtn').textContent = '取消解析';
+      controller.cancelling = false;
+    } })();
+    await controller.cancelPromise;
     return;
   }
   const urls = parseUrls(document.getElementById('urls').value);
   if (!urls.length) return;
 
+  const selectedPreset = document.getElementById('defaultQuality')?.value || 'highest';
   const btn = document.getElementById('goBtn');
   const container = document.getElementById('cards');
-  parseController = new AbortController();
+  const controller = parseController = new AbortController();
   btn.textContent = '取消解析';
-  container.innerHTML = '';
-  cardData = [];
-
+  const firstIndex = cardData.length;
   urls.forEach(url => cardData.push({ url, status: 'loading' }));
-  cardData.forEach((_card, idx) => renderCard(idx));
+  urls.forEach((_url, index) => renderCard(firstIndex + index));
+  window.mediaWorkspace?.selectCard(firstIndex);
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < urls.length) {
-      const idx = nextIndex++;
-      const url = urls[idx];
+      const offset = nextIndex++;
+      const idx = firstIndex + offset;
+      const url = urls[offset];
+      const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+      parseRequestIds.add(requestId);
     try {
+      if (controller.signal.aborted || controller.cancelling) throw new DOMException('Cancelled', 'AbortError');
       const res = await fetch('/api/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-        signal: parseController.signal,
+        body: JSON.stringify({ url, request_id: requestId, reuse_info: true }),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (data.error) {
@@ -743,11 +820,12 @@ async function go() {
           formats: data.formats || [],
           hasHdr: Boolean(data.has_hdr),
           subtitleTracks: data.subtitle_tracks || [],
+          youtubeEngine: data.youtube_engine,
           skipBrowserCookies: Boolean(data.skip_browser_cookies),
           cookieWarning: data.cookie_warning || '',
           videoRangeMode: 'auto',
           selectedFormatId: null,
-          preset: 'recommended',
+          preset: selectedPreset,
           options: {
             container: 'mp4',
             audio_quality: '192',
@@ -763,6 +841,7 @@ async function go() {
     } catch (err) {
       cardData[idx] = { ...cardData[idx], status: 'info-error', error: err.name === 'AbortError' ? '已取消解析' : err.message };
     }
+    parseRequestIds.delete(requestId);
     renderCard(idx);
     }
   };
@@ -773,13 +852,25 @@ async function go() {
     renderDownloadAll();
   }
 
+  await controller.cancelPromise;
   parseController = null;
   btn.textContent = '解析链接';
+  btn.disabled = !parseUrls(document.getElementById('urls').value).length;
 }
 
 function renderCard(idx) {
+  renderCardContent(idx);
+  window.mediaWorkspace?.render();
+}
+
+function renderCardContent(idx) {
   const c = cardData[idx];
+  if (!c) return;
   let el = document.getElementById(`card-${idx}`);
+  const advancedOpen = Boolean(el?.querySelector('.advanced-options')?.open);
+  const formatsOpen = Boolean(el?.querySelector('.format-details')?.open);
+  const qualityScroll = el?.querySelector('.quality-row')?.scrollTop || 0;
+  const focused = el?.contains(document.activeElement) ? { ...document.activeElement.dataset } : null;
   if (!el) {
     el = document.createElement('div');
     el.id = `card-${idx}`;
@@ -826,57 +917,46 @@ function renderCard(idx) {
   const isImage = cardFmt === 'image';
   const downloadsSubtitle = isVideo && (c.options?.subtitle_mode || 'none') === 'download';
 
-  let thumbHtml;
-  if (isAudio) {
-    thumbHtml = `<div class="no-thumb no-thumb-accent"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>`;
-  } else if (isImage) {
-    thumbHtml = safeMediaUrl(c.thumbnail) ? `<img src="${safeMediaUrl(c.thumbnail)}" alt="">` : `<div class="no-thumb no-thumb-accent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></div>`;
-  } else if (c.thumbnail) {
-    thumbHtml = safeMediaUrl(c.thumbnail) ? `<img src="${safeMediaUrl(c.thumbnail)}" alt="">` : `<div class="no-thumb"></div>`;
-  } else {
-    thumbHtml = `<div class="no-thumb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></div>`;
-  }
+  const thumbUrl = safeMediaUrl(c.thumbnail);
+  const thumbHtml = thumbUrl && !isAudio
+    ? `<img src="${attr(thumbUrl)}" alt="">`
+    : `<div class="no-thumb">${uiIcon(isAudio ? 'audio' : isImage ? 'image' : 'video')}</div>`;
 
   // Format pills
   const fmtPills = `<div class="fmt-pills">
-    <button class="fmt-pill${cardFmt === 'video' ? ' active' : ''}" data-click-action="set-card-format" data-index="${idx}" data-format="video">MP4</button>
-    <button class="fmt-pill${cardFmt === 'audio' ? ' active' : ''}" data-click-action="set-card-format" data-index="${idx}" data-format="audio">MP3</button>
-    <button class="fmt-pill${cardFmt === 'image' ? ' active' : ''}" data-click-action="set-card-format" data-index="${idx}" data-format="image">JPG</button>
+    <button class="fmt-pill${cardFmt === 'video' ? ' active' : ''}" data-click-action="set-card-format" data-index="${idx}" data-format="video" aria-pressed="${cardFmt === 'video'}">视频</button>
+    <button class="fmt-pill${cardFmt === 'audio' ? ' active' : ''}" data-click-action="set-card-format" data-index="${idx}" data-format="audio" aria-pressed="${cardFmt === 'audio'}">音频</button>
+    <button class="fmt-pill${cardFmt === 'image' ? ' active' : ''}" data-click-action="set-card-format" data-index="${idx}" data-format="image" aria-pressed="${cardFmt === 'image'}">封面</button>
   </div>`;
 
   const rangeMode = c.videoRangeMode || 'auto';
   const burnsSubtitles = (c.options?.subtitle_mode || 'none') === 'burn';
-  const rangePills = `<div class="range-pills">
-    <button class="range-pill${rangeMode === 'auto' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="auto"${burnsSubtitles ? ' disabled' : ''}>自动</button>
-    <button class="range-pill${rangeMode === 'hdr' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="hdr"${c.hasHdr && !burnsSubtitles ? '' : ' disabled'}>仅 HDR</button>
-    <button class="range-pill${rangeMode === 'sdr' ? ' active' : ''}" data-click-action="set-video-range" data-index="${idx}" data-range="sdr">仅 SDR</button>
-  </div>`;
-
+  const rangePills = `<label class="inspector-option"><span>动态范围</span><select data-change-action="set-video-range" data-index="${idx}"><option value="auto"${rangeMode === 'auto' ? ' selected' : ''}${burnsSubtitles ? ' disabled' : ''}>跟随源视频</option><option value="hdr"${rangeMode === 'hdr' ? ' selected' : ''}${c.hasHdr && !burnsSubtitles ? '' : ' disabled'}>仅 HDR</option><option value="sdr"${rangeMode === 'sdr' ? ' selected' : ''}>仅 SDR</option></select></label>`;
   const preset = c.preset || 'recommended';
-  const presets = [
-    ['recommended', '推荐'], ['highest', '最高画质'], ['smallest', '节省空间'], ['compatible', '兼容模式']
-  ];
-  const presetPills = `<div class="preset-row">${presets.map(([value, label]) =>
-    `<button class="q-chip${preset === value && !c.selectedFormatId ? ' active' : ''}" data-click-action="set-preset" data-index="${idx}" data-preset="${value}">${label}</button>`
-  ).join('')}</div>`;
+  const webm = c.options?.container === 'webm';
+  const presets = [['highest', '最高画质'], ['recommended', '均衡 · 1080p'], ['smallest', '节省空间'], ['compatible', '兼容优先']];
+  const presetPills = `<label class="inspector-option"><span>画质</span><select data-change-action="set-preset" data-index="${idx}">${c.selectedFormatId ? '<option selected disabled>指定格式</option>' : ''}${presets.map(([value, label]) => `<option value="${value}"${preset === value && !c.selectedFormatId ? ' selected' : ''}${webm && value === 'compatible' ? ' disabled' : ''}>${label}</option>`).join('')}</select></label>`;
 
   // Quality chips (only for video)
   let qualityChips = '';
-  if (isVideo && c.formats && c.formats.length > 0) {
-    const visibleFormats = rangeMode === 'hdr'
-      ? c.formats.filter(f => f.hdr)
-      : rangeMode === 'sdr'
-        ? c.formats.filter(f => !f.hdr)
-        : c.formats;
+  if (isVideo && !downloadsSubtitle && c.formats && c.formats.length > 0) {
+    const visibleFormats = c.formats.filter(f =>
+      (!webm || isWebmFormat(f)) && (rangeMode === 'hdr' ? f.hdr : rangeMode === 'sdr' ? !f.hdr : true)
+    );
     qualityChips = visibleFormats.map(f => {
-      const size = f.filesize ? ` · ${f.filesize_is_estimate ? '约 ' : ''}${fmtSize(f.filesize)}` : '';
-      const fps = f.fps ? ` · ${Math.round(f.fps)}fps` : '';
-      return `<button class="q-chip${f.id === c.selectedFormatId ? ' active' : ''}" title="${attr((f.vcodec || '') + fps + size)}" data-click-action="pick-format" data-index="${idx}" data-format-id="${attr(String(f.id))}">${esc(f.label)}${esc(size)}</button>`;
+      const size = f.filesize ? `${f.filesize_is_estimate ? '约 ' : ''}${fmtSize(f.filesize)}` : '大小未知';
+      const codec = /av01|av1/i.test(f.vcodec || '') ? 'AV1' : /vp0?9/i.test(f.vcodec || '') ? 'VP9' : /avc|h264/i.test(f.vcodec || '') ? 'H.264' : /hev|hvc|h265/i.test(f.vcodec || '') ? 'HEVC' : f.vcodec || '';
+      const subtitle = [codec, f.fps ? `${Math.round(f.fps)} fps` : '', size].filter(Boolean).join(' · ');
+      const selected = String(f.id) === String(c.selectedFormatId);
+      return `<button class="q-chip format-choice${selected ? ' active' : ''}" aria-pressed="${selected}" data-click-action="pick-format" data-index="${idx}" data-format-id="${attr(String(f.id))}"><span class="format-copy"><strong>${esc(f.label)}</strong><small>${esc(subtitle)}</small></span><span class="format-check" aria-hidden="true">${uiIcon('check')}</span></button>`;
     }
     ).join('');
   }
 
   const options = c.options || {};
+  const disclosureHeader = (title, detail) => `<summary><span class="disclosure-copy"><strong>${title}</strong><small>${esc(detail)}</small></span><svg class="disclosure-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg></summary>`;
+  const chosenFormat = c.formats?.find(f => String(f.id) === String(c.selectedFormatId));
+  const formatOptions = isVideo && !downloadsSubtitle && qualityChips ? `<details class="format-details option-section">${disclosureHeader('分辨率与编码', chosenFormat?.label || '自动匹配当前画质偏好')}<div class="option-content"><p class="option-hint">选择源视频提供的格式</p><div class="quality-row" aria-label="可用视频格式">${qualityChips}</div></div></details>` : '';
   const subtitleMode = options.subtitle_mode || (options.subtitles ? 'embed' : 'none');
   const subtitleTracks = c.subtitleTracks || [];
   const embedSelectedCodes = selectedEmbedSubtitleCodes(
@@ -895,13 +975,20 @@ function renderCard(idx) {
     const label = `${track.name || track.code} (${track.code})${track.automatic ? ' · 自动字幕' : ''}`;
     return `<option value="${attr(track.code)}"${options.subtitle_language === track.code ? ' selected' : ''}>${esc(label)}</option>`;
   }).join('');
-  const advancedOptions = `<details class="advanced-options"${downloadsSubtitle ? ' open' : ''}>
-    <summary>高级选项</summary>
-    <div class="advanced-grid">
-      ${isVideo && !downloadsSubtitle ? `<label class="select-field"><span>封装</span><select data-change-action="set-option" data-index="${idx}" data-option="container"><option value="mp4"${options.container === 'mp4' ? ' selected' : ''}>MP4</option><option value="mkv"${options.container === 'mkv' ? ' selected' : ''}>MKV</option><option value="webm"${options.container === 'webm' ? ' selected' : ''}>WebM</option></select></label>` : ''}
-      ${isAudio ? `<label class="select-field"><span>音质</span><select data-change-action="set-option" data-index="${idx}" data-option="audio_quality"><option value="128"${options.audio_quality === '128' ? ' selected' : ''}>128 kbps</option><option value="192"${(options.audio_quality || '192') === '192' ? ' selected' : ''}>192 kbps</option><option value="256"${options.audio_quality === '256' ? ' selected' : ''}>256 kbps</option><option value="320"${options.audio_quality === '320' ? ' selected' : ''}>320 kbps</option></select></label>` : ''}
-      ${!isImage && !downloadsSubtitle ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="metadata"${options.metadata ? ' checked' : ''}>写入元数据</label><label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="embed_thumbnail"${options.embed_thumbnail ? ' checked' : ''}>嵌入封面</label>` : ''}
-      ${isVideo ? `<label class="select-field"><span>字幕处理</span><select data-change-action="set-subtitle-mode" data-index="${idx}"><option value="none"${subtitleMode === 'none' ? ' selected' : ''}>不处理字幕</option><option value="embed"${subtitleMode === 'embed' ? ' selected' : ''}>嵌入为可切换字幕</option><option value="burn"${subtitleMode === 'burn' ? ' selected' : ''}>烧录到视频画面</option><option value="download"${subtitleMode === 'download' ? ' selected' : ''}>仅下载字幕文件</option></select></label>${!downloadsSubtitle ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label>` : ''}${subtitleMode === 'embed' ? `<div class="multi-select-field"><span>字幕语言</span><details class="subtitle-multi${subtitleTracks.length ? '' : ' disabled'}"><summary id="embed-subtitle-summary-${idx}">${esc(embedSubtitleSummary(embedSelectedCodes, subtitleTracks))}</summary>${subtitleTracks.length ? `<div class="subtitle-multi-menu">${embedSubtitleOptions}</div>` : ''}</details></div>` : ''}${subtitleMode === 'burn' ? `<label class="select-field"><span>烧录语言</span><select data-change-action="set-option" data-index="${idx}" data-option="burn_subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${subtitleTrackOptions}</select><span class="field-help">硬字幕会重新编码视频，并永久显示在画面中；当前仅支持 SDR。</span></label>` : ''}${subtitleMode === 'download' ? `<label class="select-field"><span>字幕语言</span><select data-change-action="set-option" data-index="${idx}" data-option="subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${downloadSubtitleTrackOptions}</select></label><label class="select-field"><span>字幕格式</span><select data-change-action="set-option" data-index="${idx}" data-option="subtitle_format"><option value="srt"${(options.subtitle_format || 'srt') === 'srt' ? ' selected' : ''}>SRT</option><option value="vtt"${options.subtitle_format === 'vtt' ? ' selected' : ''}>VTT</option><option value="ass"${options.subtitle_format === 'ass' ? ' selected' : ''}>ASS</option></select><span class="field-help">仅下载选定字幕，不会下载视频或音频。</span></label>` : ''}` : ''}
+  const optionSwitch = (key, title, hint, disabled = false) => `<label class="option-toggle${disabled ? ' unavailable' : ''}"><span class="option-copy"><span>${title}</span><small>${hint}</small></span><input type="checkbox" role="switch" aria-label="${title}" data-change-action="set-option" data-index="${idx}" data-option="${key}"${options[key] && !disabled ? ' checked' : ''}${disabled ? ' disabled' : ''}></label>`;
+  const enabledExtras = ['metadata', 'embed_thumbnail', ...(!isAudio ? ['subtitles', 'chapters'] : [])].filter(key => options[key]).length;
+  const advancedOptions = isImage ? '' : `<details class="advanced-options option-section"${downloadsSubtitle ? ' open' : ''}>
+    ${disclosureHeader('高级选项', `${isAudio ? (options.audio_quality || '192') + ' kbps' : (options.container || 'mp4').toUpperCase()} · ${enabledExtras ? enabledExtras + ' 项附加内容' : '未添加附加内容'}`)}
+    <div class="option-content advanced-grid">
+      <div class="option-group">
+      ${isVideo && !downloadsSubtitle ? `<label class="option-select"><span class="option-copy"><span>文件格式</span><small>选择视频封装</small></span><select aria-label="文件格式" data-change-action="set-option" data-index="${idx}" data-option="container"><option value="mp4"${(options.container || 'mp4') === 'mp4' ? ' selected' : ''}>MP4</option><option value="mkv"${options.container === 'mkv' ? ' selected' : ''}>MKV</option><option value="webm"${options.container === 'webm' ? ' selected' : ''}>WebM</option></select></label>` : isAudio ? `<label class="option-select"><span class="option-copy"><span>音频质量</span><small>更高音质占用更多空间</small></span><select aria-label="音频质量" data-change-action="set-option" data-index="${idx}" data-option="audio_quality">${['128','192','256','320'].map(value => `<option value="${value}"${(options.audio_quality || '192') === value ? ' selected' : ''}>${value} kbps</option>`).join('')}</select></label>` : ''}
+      </div>
+      <div class="option-group">
+        ${!downloadsSubtitle ? optionSwitch('metadata', '写入元数据', '保存标题、作者等媒体信息') : ''}
+        ${!downloadsSubtitle ? optionSwitch('embed_thumbnail', '嵌入封面', webm && !isAudio ? 'WebM 不支持嵌入封面' : '在播放器中显示视频封面', webm && !isAudio) : ''}
+        ${isVideo && !downloadsSubtitle ? optionSwitch('chapters', '保留章节', '按源视频章节浏览') : ''}
+      </div>
+      ${isVideo ? `<label class="option-select subtitle-select"><span>字幕处理</span><select data-change-action="set-subtitle-mode" data-index="${idx}"><option value="none"${subtitleMode === 'none' ? ' selected' : ''}>不处理字幕</option><option value="embed"${subtitleMode === 'embed' ? ' selected' : ''}>嵌入为可切换字幕</option><option value="burn"${subtitleMode === 'burn' ? ' selected' : ''}>烧录到视频画面</option><option value="download"${subtitleMode === 'download' ? ' selected' : ''}>仅下载字幕文件</option></select></label>${!downloadsSubtitle ? `<label class="check-field"><input type="checkbox" data-change-action="set-option" data-index="${idx}" data-option="chapters"${options.chapters ? ' checked' : ''}>保留章节</label>` : ''}${subtitleMode === 'embed' ? `<div class="multi-select-field"><span>字幕语言</span><details class="subtitle-multi${subtitleTracks.length ? '' : ' disabled'}"><summary id="embed-subtitle-summary-${idx}">${esc(embedSubtitleSummary(embedSelectedCodes, subtitleTracks))}</summary>${subtitleTracks.length ? `<div class="subtitle-multi-menu">${embedSubtitleOptions}</div>` : ''}</details></div>` : ''}${subtitleMode === 'burn' ? `<label class="option-select subtitle-select"><span>烧录语言</span><select data-change-action="set-option" data-index="${idx}" data-option="burn_subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${subtitleTrackOptions}</select><span class="field-help">硬字幕会重新编码视频，并永久显示在画面中；当前仅支持 SDR。</span></label>` : ''}${subtitleMode === 'download' ? `<label class="option-select subtitle-select"><span>字幕语言</span><select data-change-action="set-option" data-index="${idx}" data-option="subtitle_language"${subtitleTracks.length ? '' : ' disabled'}><option value="">${subtitleTracks.length ? '请选择一种字幕' : '该视频没有可用字幕'}</option>${downloadSubtitleTrackOptions}</select></label><label class="option-select subtitle-select"><span>字幕格式</span><select data-change-action="set-option" data-index="${idx}" data-option="subtitle_format"><option value="srt"${(options.subtitle_format || 'srt') === 'srt' ? ' selected' : ''}>SRT</option><option value="vtt"${options.subtitle_format === 'vtt' ? ' selected' : ''}>VTT</option><option value="ass"${options.subtitle_format === 'ass' ? ' selected' : ''}>ASS</option></select><span class="field-help">仅下载选定字幕，不会下载视频或音频。</span></label>` : ''}` : ''}
     </div>
   </details>`;
 
@@ -912,7 +999,7 @@ function renderCard(idx) {
     actionHtml = `${fmtPills}
       ${isVideo && !downloadsSubtitle ? rangePills : ''}
       ${isVideo && !downloadsSubtitle ? presetPills : ''}
-      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${formatOptions}
       ${advancedOptions}
       <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">下载</button>`;
   } else if (c.status === 'queued') {
@@ -921,7 +1008,7 @@ function renderCard(idx) {
         <span class="card-status downloading">等待下载</span>
         <button class="card-dl-btn small cancel" data-click-action="cancel-card" data-index="${idx}">取消</button>
       </div>`;
-  } else if (c.status === 'downloading' || c.status === 'paused') {
+  } else if (c.status === 'downloading' || c.status === 'paused' || c.status === 'cancelling') {
     const p = c.progress || {};
     const numericPct = Number.isFinite(p.percent) ? Math.max(0, Math.min(100, p.percent)) : null;
     const pct = numericPct != null ? numericPct.toFixed(1) : '--';
@@ -929,12 +1016,13 @@ function renderCard(idx) {
     const downloaded = fmtSize(p.downloaded || 0);
     const total = p.total ? fmtSize(p.total) : '';
     const isPaused = c.status === 'paused';
-    const statusIcon = isPaused ? '⏸' : '<span class="spin"></span>';
+    const isCancelling = c.status === 'cancelling';
+    const statusIcon = uiIcon(isPaused ? 'pause' : 'download');
     const phaseLabel = progressPhaseLabel(p.phase, p);
     const etaText = fmtEtaEstimate(p, isPaused);
     const progressDetail = phaseLabel ? etaText : [speed, etaText].filter(Boolean).join(' · ');
     const totalText = p.total_is_estimate ? `约 ${total}` : total;
-    const statusText = isPaused
+    const statusText = isCancelling ? '正在取消' : isPaused
       ? '已暂停'
       : phaseLabel || (total ? `${downloaded} / ${totalText}` : downloaded !== '0 B' ? `已下载 ${downloaded}` : '正在下载');
     progressHtml = `
@@ -944,19 +1032,19 @@ function renderCard(idx) {
       </div>
       <div class="dl-controls">
         <span class="card-status downloading">${statusIcon} ${statusText}</span>
-        <button class="card-dl-btn small" data-click-action="toggle-pause" data-index="${idx}">${isPaused ? '继续' : '暂停'}</button>
-        <button class="card-dl-btn small cancel" data-click-action="cancel-card" data-index="${idx}">取消</button>
+        <button class="card-dl-btn small" data-click-action="toggle-pause" data-index="${idx}"${isCancelling ? ' disabled' : ''}>${isPaused ? '继续' : '暂停'}</button>
+        <button class="card-dl-btn small cancel" data-click-action="cancel-card" data-index="${idx}"${isCancelling ? ' disabled' : ''}>取消</button>
       </div>`;
   } else if (c.status === 'done') {
     const completed = completedDownloadFor(c, cardFmt);
     const completionStatus = completed
-      ? `<span class="card-status done">已保存：${esc(completed.filename || '')}</span>`
+      ? `<span class="card-status done">已保存：${esc(completed.filename || '')}${completed.mediaInfo?.dynamic_range ? ' · ' + esc(completed.mediaInfo.dynamic_range) : ''}</span>`
       : '';
     actionHtml = `${completionStatus}
       ${fmtPills}
       ${isVideo && !downloadsSubtitle ? rangePills : ''}
       ${isVideo && !downloadsSubtitle ? presetPills : ''}
-      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${formatOptions}
       ${advancedOptions}
       <div class="done-btns">
         <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">${completed ? '重新下载' : '下载'}</button>
@@ -965,70 +1053,96 @@ function renderCard(idx) {
     actionHtml = `${fmtPills}
       ${isVideo && !downloadsSubtitle ? rangePills : ''}
       ${isVideo && !downloadsSubtitle ? presetPills : ''}
-      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${formatOptions}
       ${advancedOptions}
       <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">重试</button>
       <span class="card-status error">${esc(friendlyError(c.error || 'Download failed'))}</span>`;
   } else if (c.status === 'cancelled') {
-    actionHtml = `<span class="card-status error">已取消</span>
+    actionHtml = `<span class="card-status cancelled">已取消</span>
       ${fmtPills}
       ${isVideo && !downloadsSubtitle ? rangePills : ''}
       ${isVideo && !downloadsSubtitle ? presetPills : ''}
-      ${isVideo && !downloadsSubtitle && qualityChips ? '<div class="quality-row">' + qualityChips + '</div>' : ''}
+      ${formatOptions}
       ${advancedOptions}
       <button class="card-dl-btn" data-click-action="download-card" data-index="${idx}">下载</button>`;
   }
 
   el.innerHTML = `
-    <div class="card-thumb">${thumbHtml}</div>
+    <div class="card-thumb${thumbUrl && !isAudio ? '' : ' placeholder-thumb'}">${thumbHtml}</div>
     <div class="card-body">
       <div class="card-title">${esc(c.title || '未命名媒体')}</div>
       <div class="card-meta">${esc(c.uploader)}${c.duration ? ' · ' + fmtDur(c.duration) : ''}</div>
       ${c.cookieWarning ? `<div class="cookie-warning">${esc(c.cookieWarning)}</div>` : ''}
       <div class="card-actions">${actionHtml}</div>
       ${progressHtml}
+      ${c.actionError ? `<div class="card-error-msg">${esc(c.actionError)}</div>` : ''}
     </div>
   `;
+  if (advancedOpen && el.querySelector('.advanced-options')) el.querySelector('.advanced-options').open = true;
+  if (formatsOpen && el.querySelector('.format-details')) el.querySelector('.format-details').open = true;
+  const qualityList = el.querySelector('.quality-row');
+  if (qualityList) qualityList.scrollTop = qualityScroll;
+  if (focused && (focused.clickAction || focused.changeAction)) {
+    const replacement = [...el.querySelectorAll('[data-click-action],[data-change-action]')].find(control => Object.entries(focused).every(([key, value]) => control.dataset[key] === value));
+    replacement?.focus({ preventScroll:true });
+  }
 }
 
 
 async function togglePause(idx) {
   const c = cardData[idx];
-  if (!c.jobId) return;
+  if (!c?.jobId || c.cancelRequested) return;
+  const attempt = c._downloadAttempt;
+  const jobId = c.jobId;
   try {
-    const res = await fetch(`/api/pause/${c.jobId}`, { method: 'POST' });
+    const res = await fetch(`/api/pause/${encodeURIComponent(jobId)}`, { method: 'POST' });
     const data = await res.json();
-    if (data.error) {
-      c.status = 'error';
-      c.error = data.error;
-    } else if (data.status === 'paused') {
+    if (!isCurrentCardAttempt(idx, c, attempt) || c.jobId !== jobId || c.cancelRequested) return;
+    if (!res.ok || data.error) throw new Error(data.error || '任务操作失败');
+    c.actionError = null;
+    if (data.status === 'paused') {
       c.status = 'paused';
     } else if (data.status === 'resumed') {
       c.status = 'downloading';
     }
     renderCard(idx);
   } catch (err) {
-    c.status = 'error';
-    c.error = err.message;
+    if (!isCurrentCardAttempt(idx, c, attempt) || c.jobId !== jobId || c.cancelRequested) return;
+    c.actionError = friendlyError(err.message);
     renderCard(idx);
   }
 }
 
 async function cancelDl(idx) {
   const c = cardData[idx];
-  if (!c.jobId) return;
-  // Stop poll immediately to prevent race with in-flight responses
+  if (!c || c.cancelRequested || !c._downloadAttempt) return;
+  c._downloadAttempt.cancelled = true;
   c.cancelRequested = true;
-  if (c._pollInterval) {
-    clearTimeout(c._pollInterval);
-    c._pollInterval = null;
-  }
+  c.status = 'cancelling';
+  c.actionError = null;
+  stopCardPolling(c);
+  renderCard(idx);
+  if (c.jobId) await finishCardCancellation(idx, c, c._downloadAttempt, c.jobId);
+}
+
+async function finishCardCancellation(idx, card, attempt, jobId) {
   try {
-    await fetch(`/api/cancel/${c.jobId}`, { method: 'POST' });
-    c.status = 'cancelled';
-    c.progress = {};
-    renderCard(idx);
-  } catch {}
+    const response = await fetch(`/api/cancel/${encodeURIComponent(jobId)}`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || '取消失败');
+    if (!isCurrentCardAttempt(idx, card, attempt)) return;
+    card.status = 'cancelled';
+    card.progress = {};
+    card.activeRequest = null;
+  } catch (error) {
+    if (!isCurrentCardAttempt(idx, card, attempt)) return;
+    attempt.cancelled = false;
+    card.cancelRequested = false;
+    card.status = 'downloading';
+    card.actionError = friendlyError(error.message);
+    pollCard(idx, card, jobId);
+  }
+  if (isCurrentCardAttempt(idx, card, attempt)) renderCard(idx);
 }
 
 function renderDownloadAll() {
@@ -1049,13 +1163,25 @@ function pickFormat(idx, formatId) {
 }
 
 function setPreset(idx, preset) {
+  if (preset === 'compatible' && cardData[idx].options?.container === 'webm') return;
   cardData[idx].preset = preset;
   cardData[idx].selectedFormatId = null;
   renderCard(idx);
 }
 
 function setOption(idx, key, value) {
-  cardData[idx].options = { ...(cardData[idx].options || {}), [key]: value };
+  const card = cardData[idx];
+  card.options = { ...(card.options || {}), [key]: value };
+  if (key === 'container' && value === 'webm') {
+    card.options.embed_thumbnail = false;
+    if (card.preset === 'compatible') card.preset = 'recommended';
+    const selected = card.formats?.find(format => format.id === card.selectedFormatId);
+    if (selected && !isWebmFormat(selected)) {
+      card.selectedFormatId = null;
+      card.preset = 'recommended';
+    }
+  }
+  renderCard(idx);
 }
 
 function toggleEmbedSubtitleLanguage(idx, language, checked) {
@@ -1099,11 +1225,16 @@ function setVideoRangeMode(idx, mode) {
 
 async function dlCard(idx) {
   const c = cardData[idx];
+  if (!c || ['downloading', 'queued', 'paused', 'cancelling'].includes(c.status)) return;
   const requestedFormat = currentCardFormat(idx);
   const requested = buildDownloadRequest(c, requestedFormat);
   const resumeJobId = c.status === 'error' && c.resumable && c.jobId
     && c.activeRequest && downloadRequestKey(c.activeRequest) === downloadRequestKey(requested)
     ? c.jobId : null;
+  stopCardPolling(c);
+  const attempt = { cancelled: false };
+  c._downloadAttempt = attempt;
+  c.jobId = null;
   c.activeRequest = requested;
   if (c.activeRequest.options?.subtitle_mode === 'embed' &&
       !c.activeRequest.options?.subtitle_languages) {
@@ -1128,6 +1259,7 @@ async function dlCard(idx) {
   }
   c.status = 'downloading';
   c.error = null;
+  c.actionError = null;
   c.progress = {};
   c.cancelRequested = false;
   renderCard(idx);
@@ -1138,44 +1270,51 @@ async function dlCard(idx) {
       headers: resumeJobId ? undefined : { 'Content-Type': 'application/json' },
       body: resumeJobId ? undefined : JSON.stringify({
         url: c.url,
-        format: c.activeRequest.format,
-        format_id: c.activeRequest.formatId,
-        video_range_mode: c.activeRequest.videoRangeMode || 'auto',
-        preset: c.activeRequest.preset,
-        options: c.activeRequest.options,
+        format: requested.format,
+        format_id: requested.formatId,
+        video_range_mode: requested.videoRangeMode || 'auto',
+        preset: requested.preset,
+        options: requested.options,
+        thumbnail: c.thumbnail,
+        youtube_engine: c.youtubeEngine,
         skip_browser_cookies: Boolean(c.skipBrowserCookies),
         title: c.title || '',
       }),
     });
     const data = await res.json();
-    if (data.error) {
-      c.status = 'error';
-      c.error = data.error;
-      renderCard(idx);
-      return;
+    if (!res.ok || data.error || !data.job_id) throw new Error(data.error || '无法创建下载任务');
+    if (isCurrentCardAttempt(idx, c, attempt)) c.jobId = data.job_id;
+    if (attempt.cancelled) {
+      await finishCardCancellation(idx, c, attempt, data.job_id);
+    } else if (isCurrentCardAttempt(idx, c, attempt)) {
+      pollCard(idx, c, data.job_id);
     }
-    c.jobId = data.job_id;
-    pollCard(idx);
   } catch (err) {
+    if (!isCurrentCardAttempt(idx, c, attempt)) return;
     c.status = 'error';
     c.error = err.message;
     renderCard(idx);
   }
 }
 
-function pollCard(idx) {
-  const c = cardData[idx];
+function pollCard(idx, c = cardData[idx], jobId = c?.jobId) {
+  if (!c || !jobId || cardData[idx] !== c) return;
+  stopCardPolling(c);
+  const generation = c._pollGeneration;
+  const attempt = c._downloadAttempt;
+  const current = () => isCurrentCardAttempt(idx, c, attempt)
+    && c.jobId === jobId && c._pollGeneration === generation && !c.cancelRequested;
   const poll = async () => {
+    if (!current()) return;
     c._pollInterval = null;
-    if (c.cancelRequested) return;
     let keepPolling = true;
+    const controller = new AbortController();
+    c._pollController = controller;
     try {
-      const res = await fetch(`/api/status/${c.jobId}`);
+      const res = await fetch(`/api/status/${encodeURIComponent(jobId)}`, { signal: controller.signal });
       const data = await res.json();
-      // Ignore stale poll response if user cancelled while we were waiting
-      if (c.cancelRequested) {
-        return;
-      }
+      if (!current()) return;
+      if (!res.ok) throw new Error(data.error || 'Lost connection to server');
       if (data.progress) {
         c.progress = data.progress;
       }
@@ -1185,14 +1324,16 @@ function pollCard(idx) {
         c.completedDownloads = c.completedDownloads || {};
         c.completedDownloads[downloadRequestKey(completedRequest)] = {
           filename: data.filename,
+          mediaInfo: data.media_info,
           request: completedRequest,
         };
         c.status = 'done';
+        c.actionError = null;
         c.resumable = false;
         c.filename = data.filename;
         c.activeRequest = null;
-        if (!notifiedJobs.has(c.jobId)) {
-          notifiedJobs.add(c.jobId);
+        if (!notifiedJobs.has(jobId)) {
+          notifiedJobs.add(jobId);
           if (window.electronAPI?.notify) window.electronAPI.notify('MediaDrop 下载完成', data.filename || c.title || '文件已保存');
         }
         renderCard(idx);
@@ -1207,7 +1348,7 @@ function pollCard(idx) {
         c.status = 'cancelled';
         renderCard(idx);
       } else if (data.status === 'paused') {
-        // Keep polling but don't change status (user controls it)
+        c.status = 'paused';
         c.progress = data.progress;
         renderCard(idx);
       } else if (data.status === 'queued' || data.status === 'starting') {
@@ -1217,13 +1358,16 @@ function pollCard(idx) {
         c.status = 'downloading';
         renderCard(idx);
       }
-    } catch {
+    } catch (error) {
+      if (!current() || error.name === 'AbortError') return;
       keepPolling = false;
       c.status = 'error';
-      c.error = 'Lost connection to server';
+      c.error = error.message || 'Lost connection to server';
       renderCard(idx);
+    } finally {
+      if (c._pollController === controller) c._pollController = null;
     }
-    if (keepPolling && !c.cancelRequested) {
+    if (keepPolling && current()) {
       c._pollInterval = setTimeout(poll, 1000);
     }
   };
@@ -1234,8 +1378,10 @@ async function dlAll() {
   const btn = document.querySelector('.dl-all-btn');
   if (btn) { btn.disabled = true; btn.textContent = '正在下载...'; }
 
-  for (let i = 0; i < cardData.length; i++) {
-    if (cardData[i].status === 'ready') {
+  const batch = cardData.slice();
+  for (let i = 0; i < batch.length; i++) {
+    if (cardData[i] !== batch[i]) break;
+    if (batch[i].status === 'ready') {
       await dlCard(i);
     }
   }
@@ -1273,21 +1419,31 @@ async function taskAction(id, action, extra = {}) {
     const response = await fetch(url, options);
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || '任务操作失败');
+    if (action === 'delete') {
+      // A completed download can still have a live renderer card. Dismiss it
+      // only after deletion succeeds, or it reappears as an orphaned task.
+      for (const card of cardData) {
+        if (card.jobId !== id) continue;
+        stopCardPolling(card);
+        card.dismissed = true;
+        card.status = 'dismissed';
+      }
+    }
     await refreshTaskCenter();
   } catch (error) {
+    window.mediaWorkspace?.message(friendlyError(error.message));
     setSettingsMsg('err', friendlyError(error.message), true);
   }
 }
 
 function taskButtons(task) {
   const id = attr(task.id);
-  if (task.status === 'queued') return `<button title="上移" data-click-action="task-action" data-job-id="${id}" data-task-action="reorder" data-direction="up">&uarr;</button><button title="下移" data-click-action="task-action" data-job-id="${id}" data-task-action="reorder" data-direction="down">&darr;</button><button title="取消" data-click-action="task-action" data-job-id="${id}" data-task-action="cancel">&times;</button>`;
-  if (task.status === 'downloading' || task.status === 'paused') return `<button title="${task.status === 'paused' ? '继续' : '暂停'}" data-click-action="task-action" data-job-id="${id}" data-task-action="pause">${task.status === 'paused' ? '&#9654;' : '&#10074;&#10074;'}</button><button title="取消" data-click-action="task-action" data-job-id="${id}" data-task-action="cancel">&times;</button>`;
-  if (task.status === 'done') {
-    const file = attr(task.file || '');
-    return `<button title="在文件夹中显示" data-click-action="reveal-task-file" data-file-path="${file}">&#128193;</button><button title="重新下载" data-click-action="task-action" data-job-id="${id}" data-task-action="retry">&#8635;</button><button title="移除记录" data-click-action="task-action" data-job-id="${id}" data-task-action="delete">&times;</button>`;
-  }
-  return `<button title="重试" data-click-action="task-action" data-job-id="${id}" data-task-action="retry">&#8635;</button><button title="移除记录" data-click-action="task-action" data-job-id="${id}" data-task-action="delete">&times;</button>`;
+  const button = (action, label, icon, extra = '') => `<button title="${label}" aria-label="${label}" data-click-action="task-action" data-job-id="${id}" data-task-action="${action}" ${extra}>${uiIcon(icon)}</button>`;
+  if (task.status === 'starting' || task.status === 'interrupted') return button('cancel', '取消下载', 'close');
+  if (task.status === 'queued') return button('reorder', '上移', 'up', 'data-direction="up"') + button('reorder', '下移', 'down', 'data-direction="down"') + button('cancel', '取消下载', 'close');
+  if (task.status === 'downloading' || task.status === 'paused') return button('pause', task.status === 'paused' ? '继续下载' : '暂停下载', task.status === 'paused' ? 'play' : 'pause') + button('cancel', '取消下载', 'close');
+  if (task.status === 'done') return `<button title="在 Finder 中显示" aria-label="在 Finder 中显示" data-click-action="reveal-task-file" data-file-path="${attr(task.file || '')}">${uiIcon('folder')}</button>` + button('retry', '重新下载', 'retry') + button('delete', '移除记录，保留文件', 'trash');
+  return button('retry', '重试下载', 'retry') + button('delete', '移除记录，保留文件', 'trash');
 }
 
 async function revealTaskFile(filePath) {
@@ -1299,10 +1455,11 @@ async function refreshTaskCenter() {
   clearTimeout(taskRefreshTimer);
   let nextRefresh = 10000;
   try {
-    const response = await fetch('/api/jobs?limit=50');
+    const response = await fetch('/api/jobs?limit=200&include_active=1');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '无法读取任务');
     const tasks = data.jobs || [];
+    window.mediaWorkspace?.update(tasks);
     const center = document.getElementById('taskCenter');
     center.hidden = tasks.length === 0;
     if (!tasks.length) return;
@@ -1313,7 +1470,7 @@ async function refreshTaskCenter() {
     document.getElementById('taskSummary').textContent = `${active.length} 个进行中 · ${tasks.length} 条记录${average}`;
     document.getElementById('taskList').innerHTML = tasks.map(task => {
       const percent = Number.isFinite(task.progress?.percent) ? ` · ${task.progress.percent.toFixed(1)}%` : '';
-      const detail = task.error ? ` · ${esc(friendlyError(task.error))}` : '';
+      const detail = task.error ? ` · ${esc(friendlyError(task.error))}` : task.media_info?.dynamic_range ? ` · ${esc(task.media_info.dynamic_range)}` : '';
       return `<div class="task-row"><div><div class="task-title">${esc(task.title || task.filename || '未命名任务')}</div><div class="task-meta">${taskStatusLabel(task)} · ${(task.format || 'video').toUpperCase()}${percent}${detail}</div></div><div class="task-actions">${taskButtons(task)}</div></div>`;
     }).join('');
     if (taskCenterInitialized) {
@@ -1325,7 +1482,7 @@ async function refreshTaskCenter() {
       tasks.filter(task => task.status === 'done').forEach(task => notifiedJobs.add(task.id));
       taskCenterInitialized = true;
     }
-  } catch {} finally {
+  } catch { window.mediaWorkspace?.connectionLost(); } finally {
     taskRefreshTimer = setTimeout(refreshTaskCenter, nextRefresh);
   }
 }
@@ -1374,10 +1531,13 @@ document.addEventListener('change', event => {
   const target = event.target.closest('[data-change-action]');
   if (!target) return;
   switch (target.dataset.changeAction) {
+    case 'set-preset': setPreset(Number(target.dataset.index), target.value); break;
+    case 'set-video-range': setVideoRangeMode(Number(target.dataset.index), target.value); break;
     case 'save-concurrency': void saveConcurrency(); break;
     case 'change-auth-mode': void changeAuthMode(); break;
     case 'change-ytdlp-channel': void checkYtdlp(); break;
     case 'change-ytdlp-release': refreshYtdlpInstallButton(); break;
+    case 'save-youtube-mode': void postConfig({ youtube_enhanced: target.value === 'enhanced' }, '已更新 YouTube 模式，请重新解析链接').then(loadEngineStatus); break;
     case 'save-cookies': void saveCookies(); break;
     case 'set-subtitle-mode':
       setSubtitleMode(Number(target.dataset.index), target.value);
@@ -1416,3 +1576,11 @@ if (window.electronAPI?.getAppUpdateState) {
 }
 
 refreshTaskCenter();
+
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-browser-permission]')) void window.electronAPI?.requestBrowserAccess?.(document.getElementById('cookiesBrowser').value || 'chrome');
+});
+
+if (window.electronAPI?.requestBrowserAccess && /Mac/.test(navigator.platform)) {
+  document.querySelector('[data-browser-permission]').hidden = false;
+}

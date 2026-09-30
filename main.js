@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const {
   appendBoundedText,
   compareVersions,
+  ensureSingleInstance,
   getDevelopmentPythonCandidates,
   isSafeExternalUrl,
   isSupportedProxyUrl,
@@ -19,7 +20,15 @@ const {
   stopProcessTree,
 } = require("./electron-utils");
 
+const nativeGlass = require("./native-glass");
+nativeGlass.install(require("electron"));
+require("./native-menus").installNativeMenus(require("electron"));
+
 let mainWindow = null;
+let settingsWindow = null;
+let desktop = null;
+const { installDesktop } = require("./desktop-integration");
+const isPrimaryInstance = ensureSingleInstance(app, () => mainWindow);
 let flaskProcess = null;
 let PORT = null;
 const API_TOKEN = crypto.randomBytes(32).toString("hex");
@@ -33,8 +42,8 @@ let updateState = {
 
 function publishUpdateState(nextState) {
   updateState = { ...updateState, ...nextState };
-  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isLoading()) {
-    mainWindow.webContents.send("app-update-state", updateState);
+  for (const win of [mainWindow, settingsWindow]) {
+    if (win && !win.isDestroyed() && !win.webContents.isLoading()) win.webContents.send("app-update-state", updateState);
   }
   return updateState;
 }
@@ -282,8 +291,8 @@ function checkDependencies() {
     if (app.isPackaged) {
       const binDir = getBinDir();
       const required = process.platform === "win32"
-        ? ["mediadrop-server.exe", "yt-dlp.exe", "ffmpeg.exe"]
-        : ["mediadrop-server", "yt-dlp", "ffmpeg"];
+        ? ["mediadrop-server.exe", "yt-dlp.exe", "ffmpeg.exe", "ffprobe.exe"]
+        : ["mediadrop-server", "yt-dlp", "ffmpeg", "ffprobe"];
       const missing = required.filter(name => !fs.existsSync(path.join(binDir, name)));
       resolve(missing);
       return;
@@ -293,6 +302,7 @@ function checkDependencies() {
       { cmd: getPythonPath(), args: ["--version"], name: "Python 3" },
       { cmd: "yt-dlp", args: ["--version"], name: "yt-dlp" },
       { cmd: "ffmpeg", args: ["-version"], name: "ffmpeg" },
+      { cmd: "ffprobe", args: ["-version"], name: "ffprobe" },
     ];
 
     Promise.all(checks.map(({ cmd, args, name }) => new Promise((done) => {
@@ -424,17 +434,26 @@ async function getDownloadDir() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 750,
+    width: 1180,
+    height: 780,
+    minWidth: 760,
+    minHeight: 540,
+    ...(desktop?.savedBounds() || {}),
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 20 } } : {}),
+    backgroundColor: "#202226",
+    ...nativeGlass.windowOptions(app),
     title: "MediaDrop",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      backgroundThrottling: false,
     },
   });
 
+  if (process.platform === "darwin") mainWindow.setWindowButtonVisibility(true);
+  desktop?.attachWindow(mainWindow);
   const localOrigin = `http://127.0.0.1:${PORT}`;
   mainWindow.webContents.session.cookies.set({
     url: localOrigin,
@@ -470,8 +489,70 @@ function createWindow() {
   });
 }
 
-// --- IPC handlers (called from renderer via preload.js) ---
+async function readDesktopJobs() {
+  const response = await fetch(`http://127.0.0.1:${PORT}/api/jobs?limit=200&include_active=1`, {
+    headers: { "X-MediaDrop-Token": API_TOKEN }, signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error("Unable to read download queue");
+  return (await response.json()).jobs || [];
+}
 
+function openSettingsWindow(tab) {
+  const revealTab = win => { if (tab === "network") { if (win.webContents.isLoading()) win.webContents.once("did-finish-load", () => win.webContents.send("desktop-command", "settings-network")); else win.webContents.send("desktop-command", "settings-network"); } };
+  if (settingsWindow && !settingsWindow.isDestroyed()) { settingsWindow.show(); settingsWindow.focus(); revealTab(settingsWindow); return; }
+  settingsWindow = new BrowserWindow({ width: 680, height: 740, minWidth: 560, minHeight: 520, title: "MediaDrop 设置", minimizable: false,
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 20 } } : {}),
+    ...nativeGlass.windowOptions(app),
+    webPreferences: { preload: path.join(__dirname, "preload.js"), nodeIntegration: false, contextIsolation: true, sandbox: true } });
+  if (process.platform === "darwin") settingsWindow.setWindowButtonVisibility(true);
+  if (tab === "network") settingsWindow.webContents.once("did-finish-load", () => settingsWindow?.webContents.send("desktop-command", "settings-network"));
+  const origin = `http://127.0.0.1:${PORT}`;
+  settingsWindow.webContents.session.cookies.set({ url: origin, name: "mediadrop_token", value: API_TOKEN, httpOnly: true, sameSite: "strict" })
+    .then(() => { if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.loadURL(`${origin}/?settings=1`); });
+  settingsWindow.webContents.on("will-navigate", (event, url) => { if (!url.startsWith(`${origin}/`)) event.preventDefault(); });
+  settingsWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  settingsWindow.on("closed", () => { settingsWindow = null; });
+}
+
+// --- IPC handlers (called from renderer via preload.js) ---
+async function browserAccess(browser = 'chrome') {
+  const result = await require('./browser-permissions').requestBrowserAccess(browser, {home:os.homedir()});
+  const detail = {
+    denied: 'macOS 已阻止访问浏览器数据。请在“系统设置 → 隐私与安全 → 文件与文件夹 → MediaDrop”中开启对应浏览器。重新登录或关闭浏览器无法解除此限制。',
+    missing: '尚未找到该浏览器的数据目录。请先安装并打开此浏览器，或在设置中选择其他浏览器。',
+    error: '无法检查浏览器数据权限，请稍后在设置中重试。',
+  }[result.status];
+  if (detail) {
+    const answer = await dialog.showMessageBox({type:'info',message:'浏览器数据访问',detail,
+      buttons:result.status === 'denied' ? ['打开系统设置','稍后'] : ['好'],cancelId:result.status === 'denied' ? 1 : 0});
+    if (result.status === 'denied' && answer.response === 0) await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders');
+  }
+  return result;
+}
+ipcMain.handle('request-browser-access', (_event, browser) => browserAccess(browser));
+async function firstRunBrowserAccess() {
+  if (process.platform !== 'darwin') return;
+  const marker = path.join(app.getPath('userData'),'browser-permission-intro-v1.json');
+  if (fs.existsSync(marker)) return;
+  const answer = await dialog.showMessageBox(mainWindow,{type:'info',title:'浏览器登录授权',
+    message:'允许 MediaDrop 使用浏览器登录状态？',
+    detail:'读取 Chrome 登录 Cookie 可用于解析需要登录的视频。下一步 macOS 可能询问是否允许访问 Chrome 数据，请选择允许。解密时也可能出现 Chrome Safe Storage 钥匙串提示。你可以稍后在设置中选择其他浏览器或 cookies.txt。',
+    buttons:['授权 Chrome','选择其他方式','暂不授权'],defaultId:0,cancelId:2});
+  if (answer.response === 0) await browserAccess('chrome');
+  else if (answer.response === 1) openSettingsWindow('network');
+  fs.writeFileSync(marker,JSON.stringify({shown:true}));
+}
+
+ipcMain.handle("close-settings-window", event => {
+  if (!settingsWindow || settingsWindow.isDestroyed() || event.sender !== settingsWindow.webContents || event.senderFrame !== event.sender.mainFrame) return false;
+  settingsWindow.close();
+  return true;
+});
+
+ipcMain.handle("select-media-file", async () => {
+  const result = await dialog.showOpenDialog(mainWindow || undefined, {title:"重新定位已下载文件",properties:["openFile"],filters:[{name:"媒体文件",extensions:["mp4","mkv","webm","mov","mp3","m4a","opus","wav","jpg","jpeg","png","webp"]}]});
+  return result.canceled ? null : result.filePaths[0] || null;
+});
 ipcMain.handle("select-folder", async () => {
   const result = await dialog.showOpenDialog(mainWindow || undefined, {
     properties: ["openDirectory", "createDirectory"],
@@ -533,13 +614,8 @@ ipcMain.handle("show-item-in-folder", (_event, filePath) => {
   return true;
 });
 
-ipcMain.handle("show-notification", (_event, title, body) => {
-  if (!mainWindow || mainWindow.isDestroyed()) return false;
-  const { Notification } = require("electron");
-  if (!Notification.isSupported()) return false;
-  new Notification({ title: String(title).slice(0, 80), body: String(body).slice(0, 200) }).show();
-  return true;
-});
+// Completion notifications are aggregated by the main process, including hidden windows.
+ipcMain.handle("show-notification", () => false);
 
 ipcMain.handle("get-app-update-state", () => updateState);
 
@@ -555,11 +631,15 @@ ipcMain.handle("open-app-update-download", async () => {
 // --- App lifecycle ---
 
 app.whenReady().then(async () => {
+  if (!isPrimaryInstance) return;
   const missing = await checkDependencies();
 
   if (missing.length > 0) {
+    const brewPackages = [...new Set(missing.map((name) => (
+      name === "ffprobe" ? "ffmpeg" : name.toLowerCase().replace(" ", "-")
+    )))];
     const installHint = process.platform === "darwin"
-      ? `Install with:\n  brew install ${missing.map((m) => m.toLowerCase().replace(" ", "-")).join(" ")}`
+      ? `Install with:\n  brew install ${brewPackages.join(" ")}`
       : "Install Python 3, yt-dlp, and FFmpeg, and make sure they are available on PATH.";
     const message = app.isPackaged
       ? `Bundled dependencies are missing: ${missing.join(", ")}\n\nThis is a packaging error. Please reinstall MediaDrop.`
@@ -578,7 +658,10 @@ app.whenReady().then(async () => {
     const proxyUrl = detectProxy();
     PORT = await startFlaskServer(proxyUrl);
     console.log(`[startup] Backend ready on port ${PORT}`);
+    desktop = installDesktop({ electron: require("electron"), getMainWindow: () => mainWindow,
+      createMainWindow: createWindow, readJobs: readDesktopJobs, openSettingsWindow });
     createWindow();
+    mainWindow.webContents.once('did-finish-load', () => { void firstRunBrowserAccess().catch(error => console.error('Browser permission introduction failed:',error.code || 'unknown')); });
     const firstUpdateCheck = setTimeout(() => checkForAppUpdate(false), 30000);
     firstUpdateCheck.unref();
     const updateTimer = setInterval(() => checkForAppUpdate(false), UPDATE_CHECK_INTERVAL);
@@ -602,10 +685,9 @@ function stopFlaskServer() {
   }
 }
 
-app.on("before-quit", stopFlaskServer);
+app.on("will-quit", stopFlaskServer);
 app.on("window-all-closed", () => {
-  stopFlaskServer();
-  app.quit();
+  if (process.platform !== "darwin") app.quit();
 });
 
 for (const signalName of ["SIGINT", "SIGTERM"]) {
@@ -617,7 +699,10 @@ for (const signalName of ["SIGINT", "SIGTERM"]) {
 
 // macOS dock click — reopen window if all were closed
 app.on("activate", () => {
-  if (mainWindow === null) {
-    createWindow();
+  if (isPrimaryInstance && PORT) {
+    if (!mainWindow) createWindow();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   }
 });

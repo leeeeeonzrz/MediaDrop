@@ -144,6 +144,112 @@ class ProgressEstimatorTests(unittest.TestCase):
         self.assertAlmostEqual(result["percent"], 10100 / 110, delta=0.1)
         self.assertEqual(result["state"], "estimating")
 
+    def test_current_speed_follows_slowdown_within_four_seconds(self):
+        total = 1000 * self.MIB
+        downloaded = 0
+        self.update(0, total=total)
+        for _ in range(20):
+            self.clock.advance(1)
+            downloaded += 20 * self.MIB
+            self.update(downloaded, total=total)
+        for _ in range(4):
+            self.clock.advance(1)
+            downloaded += self.MIB
+            result = self.update(downloaded, total=total)
+        self.assertAlmostEqual(result["speed_bps"], self.MIB, delta=1)
+
+    def test_polling_ages_speed_without_new_progress(self):
+        self.update(0, total=100 * self.MIB)
+        for second in range(1, 9):
+            self.clock.advance(1)
+            self.update(second * 10 * self.MIB, total=100 * self.MIB)
+        self.clock.advance(2)
+        self.assertEqual(self.estimator.snapshot()["speed_bps"], 5 * self.MIB)
+        self.clock.advance(2)
+        self.assertIsNone(self.estimator.snapshot()["speed_bps"])
+
+    def test_pause_resume_and_new_stream_discard_previous_speed(self):
+        self.update(0, total=100 * self.MIB)
+        self.clock.advance(2)
+        self.update(40 * self.MIB, total=100 * self.MIB)
+        self.assertIsNone(self.estimator.pause()["speed_bps"])
+        self.clock.advance(60)
+        self.assertIsNone(self.estimator.resume()["speed_bps"])
+        self.clock.advance(2)
+        self.update(80 * self.MIB, total=100 * self.MIB)
+        self.clock.advance(1)
+        result = self.update(self.MIB, total=10 * self.MIB)
+        self.assertIsNone(result["speed_bps"])
+        self.assertIsNone(self.estimator.smoothed_speed)
+
+    def test_existing_resume_bytes_are_not_counted_as_transfer(self):
+        self.update(800 * self.MIB, total=1000 * self.MIB)
+        self.clock.advance(2)
+        result = self.update(802 * self.MIB, total=1000 * self.MIB)
+        self.assertEqual(result["speed_bps"], self.MIB)
+
+    def test_irregular_callbacks_interpolate_window_boundary(self):
+        self.update(0, total=100 * self.MIB)
+        for elapsed in (1.5, 2, 3):
+            self.clock.advance(elapsed)
+            result = self.update(int(self.clock.value * 2 * self.MIB), total=100 * self.MIB)
+        self.assertAlmostEqual(result["speed_bps"], 2 * self.MIB, delta=1)
+
+    def stream(self, name, downloaded, total=None, **extra):
+        return self.estimator.update(dict(filename=name, downloaded_bytes=downloaded,
+                                          total_bytes=total, **extra))
+
+    def test_interleaved_sabr_streams_are_counted_once(self):
+        for second in range(100):
+            self.clock.advance(1)
+            self.stream('video.f401.mp4', (100 + second) * self.MIB, 1000 * self.MIB)
+            self.clock.advance(1)
+            result = self.stream('audio.f251.mp4', (1 + second) * self.MIB, 110 * self.MIB)
+        self.assertEqual(result['phase_index'], 2)
+        self.assertEqual(result['downloaded'], 299 * self.MIB)
+        self.assertEqual(result['total'], 1110 * self.MIB)
+        self.assertAlmostEqual(result['speed_bps'], self.MIB, delta=1)
+        self.assertAlmostEqual(result['eta_seconds'], 811, delta=10)
+
+    def test_late_resumed_stream_does_not_inflate_speed(self):
+        self.stream('video', 100 * self.MIB, 1000 * self.MIB)
+        for i in range(1, 6):
+            self.clock.advance(1)
+            self.stream('video', (100 + i) * self.MIB, 1000 * self.MIB)
+        result = self.stream('audio', 500 * self.MIB, 600 * self.MIB)
+        self.assertEqual(result['downloaded'], 605 * self.MIB)
+        self.assertAlmostEqual(result['speed_bps'], self.MIB, delta=1)
+        self.assertEqual(result['total'], 1600 * self.MIB)
+
+    def test_same_stream_counter_regression_does_not_create_phase(self):
+        self.stream('video', 100 * self.MIB, 1000 * self.MIB)
+        self.clock.advance(1)
+        result = self.stream('video', 50 * self.MIB, 1000 * self.MIB)
+        self.assertEqual(result['phase_index'], 1)
+        self.assertEqual(result['downloaded'], 100 * self.MIB)
+        self.assertEqual(result['total'], 1000 * self.MIB)
+
+    def test_stream_totals_keep_exact_sizes_and_wait_for_unknown(self):
+        self.stream('video', self.MIB, 100 * self.MIB)
+        result = self.stream('audio', self.MIB)
+        self.assertEqual(result['total'], 0)
+        self.assertIsNone(result['eta_seconds'])
+        self.stream('audio', 2 * self.MIB, 10 * self.MIB)
+        result = self.stream('video', 2 * self.MIB, total_bytes_estimate=9999 * self.MIB)
+        self.assertEqual(result['total'], 110 * self.MIB)
+        self.assertFalse(result['total_is_estimate'])
+        result = self.stream('audio', 3 * self.MIB, status='finished')
+        self.assertEqual(result['total'], 103 * self.MIB)
+
+    def test_progress_index_zero_is_a_valid_stream_identity(self):
+        self.estimator.update(dict(progress_idx=0, downloaded_bytes=100, total_bytes=1000))
+        result = self.estimator.update(dict(progress_idx=1, downloaded_bytes=10, total_bytes=100))
+        self.assertEqual(result['downloaded'], 110)
+        self.assertEqual(result['total'], 1100)
+        result = self.estimator.update(dict(downloaded_bytes=999999, total_bytes_estimate=9999999))
+        self.assertEqual(result['downloaded'], 110)
+        self.assertEqual(result['total'], 1100)
+
     def test_unknown_total_does_not_invent_an_eta(self):
         self.update(0)
         for second in range(1, 10):
@@ -289,6 +395,9 @@ class SubtitleBurnTests(unittest.TestCase):
                 "progress=continue\n",
             ])
             returncode = 0
+
+            def poll(self):
+                return self.returncode
 
             def wait(self):
                 return 0
@@ -803,7 +912,7 @@ class CacheLifecycleTests(unittest.TestCase):
             mock.patch.object(server, "get_cookie_args", return_value=[]),
             mock.patch.object(server, "get_ffmpeg_dir", return_value=None),
             mock.patch.object(server, "get_ytdlp_env", return_value={}),
-            mock.patch.object(server.shutdown_event, "wait", return_value=False),
+            mock.patch.object(server, "wait_for_download_retry", return_value=False),
             mock.patch.object(server.subprocess, "Popen", side_effect=fail_after_partial),
         ]
         for patcher in patches:
@@ -851,11 +960,15 @@ class CacheLifecycleTests(unittest.TestCase):
                 partial = pathlib.Path(template.replace("%(ext)s", "mp4.part"))
                 with partial.open("wb") as handle:
                     handle.truncate(10 * 1024 * 1024)
-                return Process(["ERROR: connection reset by peer"], 1)
+                return Process([server.PROGRESS_PREFIX + json.dumps({
+                    "filename": "video.mp4", "downloaded_bytes": 10 * 1024 * 1024,
+                    "total_bytes": 20 * 1024 * 1024}), "ERROR: connection reset by peer"], 1)
             completed = pathlib.Path(template.replace("%(ext)s", "mp4"))
             with completed.open("wb") as handle:
                 handle.truncate(11 * 1024 * 1024)
-            return Process([], 0)
+            return Process([server.PROGRESS_PREFIX + json.dumps({
+                "filename": "video.mp4", "downloaded_bytes": 1024 * 1024,
+                "total_bytes": 11 * 1024 * 1024})], 0)
 
         server.jobs["ten-mib"] = {"status": "starting", "progress": server.empty_progress()}
         server.active_downloads.add("ten-mib")
@@ -866,7 +979,8 @@ class CacheLifecycleTests(unittest.TestCase):
             mock.patch.object(server, "get_cookie_args", return_value=[]),
             mock.patch.object(server, "get_ffmpeg_dir", return_value=None),
             mock.patch.object(server, "get_ytdlp_env", return_value={}),
-            mock.patch.object(server.shutdown_event, "wait", return_value=False),
+            mock.patch.object(server, "inspect_downloaded_video", return_value=None),
+            mock.patch.object(server, "wait_for_download_retry", return_value=False),
             mock.patch.object(server.subprocess, "Popen", side_effect=fail_then_finish),
         ]
         for patcher in patches:
@@ -881,6 +995,8 @@ class CacheLifecycleTests(unittest.TestCase):
 
         job = server.jobs["ten-mib"]
         self.assertEqual(attempts, 2)
+        self.assertEqual(job["estimator"].snapshot()["downloaded"], 1024 * 1024)
+        self.assertEqual(job["estimator"].snapshot()["total"], 11 * 1024 * 1024)
         self.assertEqual(job["status"], "done")
         self.assertEqual(os.path.getsize(job["file"]), 11 * 1024 * 1024)
         self.assertEqual(os.listdir(server.get_cache_root()), [])
@@ -1342,6 +1458,23 @@ class PersistenceAndApiTests(unittest.TestCase):
         self.assertEqual(args, ["--js-runtimes", f"node:{runtime}"])
         self.assertEqual(env["ELECTRON_RUN_AS_NODE"], "1")
 
+    def test_info_reports_browser_access_denied_without_anonymous_retry(self):
+        failed = subprocess.CompletedProcess([], 1, '', 'could not find chrome cookies database')
+        with mock.patch.object(server, 'get_extractor_command', return_value=(['yt-dlp'], 'standard')), mock.patch.object(server, 'get_cookie_args', return_value=['--cookies-from-browser','chrome']), mock.patch.object(server, 'browser_cookie_failure_code', return_value='MACOS_BROWSER_ACCESS_DENIED'), mock.patch.object(server.subprocess, 'run', return_value=failed) as run:
+            response = server.app.test_client().post('/api/info', json={'url':'https://example.com/video'})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['error_code'], 'MACOS_BROWSER_ACCESS_DENIED')
+        self.assertEqual(run.call_count, 1)
+
+    def test_browser_permission_denial_is_not_missing_profile(self):
+        with mock.patch.object(server.sys, 'platform', 'darwin'), mock.patch.object(server.os, 'scandir', side_effect=PermissionError(1, 'Operation not permitted')):
+            self.assertEqual(server.browser_cookie_failure_code('could not find chrome cookies database', 'chrome'), 'MACOS_BROWSER_ACCESS_DENIED')
+        with mock.patch.object(server.sys, 'platform', 'darwin'), mock.patch.object(server.os, 'scandir', side_effect=FileNotFoundError()):
+            self.assertEqual(server.browser_cookie_failure_code('could not find chrome cookies database', 'chrome'), 'BROWSER_PROFILE_MISSING')
+        self.assertEqual(server.browser_cookie_failure_code('failed to decrypt cookies'), 'BROWSER_KEYCHAIN_FAILED')
+        self.assertEqual(server.browser_cookie_failure_code('cookie database is locked'), 'BROWSER_DATABASE_LOCKED')
+        self.assertEqual(server.browser_cookie_failure_code('Sign in to confirm'), '')
+
     def test_info_retries_without_browser_cookies_when_database_is_locked(self):
         failed = subprocess.CompletedProcess(
             [], 1, "", "ERROR: Could not copy Chrome cookie database. Permission denied"
@@ -1355,7 +1488,8 @@ class PersistenceAndApiTests(unittest.TestCase):
                 },
             }), ""
         )
-        with mock.patch.object(server, "get_ytdlp_path", return_value="yt-dlp"), \
+        with mock.patch.object(server.sys, "platform", "win32"), \
+             mock.patch.object(server, "get_ytdlp_path", return_value="yt-dlp"), \
              mock.patch.object(server, "get_proxy_url", return_value=""), \
              mock.patch.object(server, "get_cookie_args", return_value=["--cookies-from-browser", "chrome"]), \
              mock.patch.object(server, "get_ffmpeg_dir", return_value=None), \
