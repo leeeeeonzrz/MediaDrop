@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const port = Number(process.argv[2] || 9333);
-const expectedVersion = process.argv[3] || '2026.08.19';
+const expectedVersion = process.argv[3] || '2026.10.26';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function pages() { return fetch(`http://127.0.0.1:${port}/json`).then(res => res.json()); }
 async function connect(page) {

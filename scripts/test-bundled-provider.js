@@ -7,6 +7,8 @@ const runtime = process.platform === 'win32' ? path.join(root, 'node.exe') : pro
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
 const binary = path.join(root, process.platform === 'win32' ? 'yt-dlp-sabr.exe' : 'yt-dlp-sabr');
 if (require('node:crypto').createHash('sha256').update(fs.readFileSync(binary)).digest('hex') !== manifest.engine_sha256) throw new Error('Engine checksum mismatch');
+const version = execFileSync(binary, ['--version'], {encoding:'utf8',timeout:30000,windowsHide:true}).trim();
+if (version !== manifest.engine_version) throw new Error('Engine version mismatch');
 execFileSync(runtime, ['-e', "const c=require('canvas').createCanvas(8,8);if(!c.toBuffer().length)process.exit(1)"], {cwd:path.join(root,'server'),stdio:'inherit'});
 const child = spawn(runtime,[path.join(root,'server/build/main.js'),'--host','127.0.0.1','--port','0'],{cwd:path.join(root,'server'),stdio:['ignore','pipe','inherit']});
 let ready=false, output='';

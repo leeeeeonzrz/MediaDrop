@@ -10,20 +10,20 @@ PLATFORM="${2:-mac}"
 ARCH="${3:-arm64}"
 ASSET=yt-dlp_macos.zip
 BINARY=yt-dlp-sabr
-SHA=e8cbc3239cf6f95b274051cb2c12a8960268819ff31c54a4a4553e85666855f5
+SHA=f909d7c6cc33df5a8c66445e057db4dc9e270a59aa33542b58ac12c712bd4563
 if [[ "$PLATFORM" == win ]]; then
   BINARY=yt-dlp-sabr.exe
   if [[ "$ARCH" == arm64 ]]; then
     ASSET=yt-dlp_win_arm64.zip
-    SHA=f678fd0e3329d40e9904bd8528482815b6caa87a6b6dd9af94a9d9333d853d32
+    SHA=a0a41a4c7178bdc091217e1c2cd2e6925f8254b572a8adabb25c85b5ee33fe9f
   else
     ASSET=yt-dlp_win.zip
-    SHA=26acb906275e382f41b4a0e57e081eaa17c9c76ee29039181c991666cdf61b5c
+    SHA=ad98d4a8ead8895faa5b4d3bf0bd91b94f6e0d68592a37e1b993fbc23c50ea5f
   fi
 fi
 curl -fL --retry 3 "https://github.com/bashonly/yt-dlp/releases/download/sabr/$ASSET" -o "$CACHE/$BINARY"
 python3 -c 'import hashlib,sys; assert hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()==sys.argv[2], "Enhanced engine checksum mismatch"' "$CACHE/$BINARY" "$SHA"
-git clone --depth 1 --branch 2.0.0 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$CACHE/provider"
+git clone --depth 1 --branch 2.0.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$CACHE/provider"
 (cd "$CACHE/provider/server" && npm ci && npx tsc && npm prune --omit=dev)
 # Onedir avoids extracting and validating the Python runtime on every invocation.
 python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$CACHE/$BINARY" "$CACHE/engine"

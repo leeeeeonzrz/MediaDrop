@@ -1,7 +1,9 @@
 name: Build & Release
 
 env:
-  YTDLP_VERSION: '2026.08.19'
+  YTDLP_REPOSITORY: 'yt-dlp/yt-dlp'
+  YTDLP_VERSION: '2026.10.26'
+  YTDLP_MACOS_SHA256: '0f922c15ccc0b83eefa1c8bc9104e434318c4bf16e408e1ee93b7745a6efe0aa'
   FFMPEG_VERSION: '8.1.2'
   FFMPEG_WINDOWS_RELEASE: 'autobuild-2026-09-20-13-11'
 
@@ -172,10 +174,12 @@ jobs:
         include:
           - arch: x64
             runner: windows-latest
+            ytdlp_sha256: f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d
             ffmpeg_asset: ffmpeg-n8.1.2-267-gb2f422d306-win64-gpl-8.1.zip
             ffmpeg_sha256: 66945d35abe59eafba7ebe20c1340adee816302820d89dfe64b739e8d9a8157b
           - arch: arm64
             runner: windows-11-arm
+            ytdlp_sha256: 0066dbac3c124028e2dcae2a197fccee33cd91f456313d24f7af89fd54590e98
             ffmpeg_asset: ffmpeg-n8.1.2-267-gb2f422d306-winarm64-gpl-8.1.zip
             ffmpeg_sha256: 7570ccdd56466f77132614820d1bee0df0a534633129496e70a345fafd4928cd
     runs-on: ${{ matrix.runner }}

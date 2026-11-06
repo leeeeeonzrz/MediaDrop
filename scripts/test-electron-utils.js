@@ -86,10 +86,10 @@ secondInstance();
 assert(focusActions.join(",") === "restore,show,focus", "Existing window was not restored and focused");
 
 const packageConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
-assert(packageConfig.engines.node === ">=22.12.0", "Node runtime requirement is not pinned");
+assert(packageConfig.engines.node === "^22.13.0 || >=24.0.0", "Node runtime requirement is not compatible with the bundled provider");
 assert(packageConfig.devDependencies.electron === "41.10.3", "Electron version is not pinned");
 assert(packageConfig.devDependencies["electron-builder"] === "26.15.3", "electron-builder version is not pinned");
-assert(packageConfig.version === "1.3.1-windows.1", "Windows fork release version is not pinned");
+assert(packageConfig.version === "1.3.1-windows.2", "Windows fork release version is not pinned");
 assert(!packageConfig.build.files.some((entry) => entry.startsWith("app/")), "Web source leaked into Electron app.asar");
 assert(!packageConfig.build.extraResources.some((entry) => entry.to === "app"), "Web resources were packaged twice");
 assert(packageConfig.build.extraResources.some((entry) => entry.to === "bin"), "Bundled runtime binaries are missing");
@@ -113,7 +113,12 @@ assert(buildWorkflow.includes("node-version: 22"), "Release workflow does not us
 assert(buildWorkflow.includes("pip install -r app/requirements-build.txt"), "Release workflow does not use pinned Python build dependencies");
 assert(!buildWorkflow.includes("pip install flask pyinstaller"), "Release workflow still installs moving Python build dependencies");
 assert(buildWorkflow.includes("FFMPEG_VERSION: '8.1.2'"), "Release workflow FFmpeg version is not pinned");
-assert(buildWorkflow.includes("YTDLP_VERSION: '2026.08.19'"), "Release workflow yt-dlp version is not pinned");
+assert(buildWorkflow.includes("YTDLP_VERSION: '2026.10.26'"), "Release workflow yt-dlp version is not pinned");
+assert(buildWorkflow.includes("YTDLP_REPOSITORY: 'yt-dlp/yt-dlp'"), "Release workflow standard yt-dlp repository is not defined");
+assert(/YTDLP_MACOS_SHA256: '[a-f0-9]{64}'/.test(buildWorkflow), "macOS yt-dlp checksum is not defined");
+for (const arch of ["x64", "arm64"]) {
+  assert(new RegExp(`- arch: ${arch}\\s+runner: [^\\n]+\\s+ytdlp_sha256: [a-f0-9]{64}`).test(buildWorkflow), `Windows ${arch} yt-dlp checksum is not defined`);
+}
 assert(!buildWorkflow.includes("ffmpeg-master-latest"), "Release workflow still uses a moving FFmpeg master build");
 assert(/FFMPEG_WINDOWS_RELEASE: 'autobuild-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}'/.test(buildWorkflow), "Windows FFmpeg release must be dated");
 assert(!buildWorkflow.includes("releases/download/latest/${ASSET}"), "Windows FFmpeg download still uses a moving release");
@@ -212,7 +217,7 @@ for (const capability of ["ass", "aac", "libmp3lame", "libopus", "libx264", "lib
 const runtimeRequirements = fs.readFileSync(path.join(__dirname, "..", "app", "requirements.txt"), "utf8");
 const buildRequirements = fs.readFileSync(path.join(__dirname, "..", "app", "requirements-build.txt"), "utf8");
 assert(runtimeRequirements.includes("Flask==3.1.3"), "Flask runtime version is not pinned");
-assert(runtimeRequirements.includes("yt-dlp==2026.8.19"), "yt-dlp runtime version is not pinned");
+assert(runtimeRequirements.includes("yt-dlp==2026.10.26"), "yt-dlp runtime version is not pinned");
 assert(buildRequirements.includes("PyInstaller==6.21.0"), "PyInstaller build version is not pinned");
 
 const fakePe = Buffer.alloc(256);

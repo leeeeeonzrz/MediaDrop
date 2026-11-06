@@ -162,7 +162,7 @@ V1.2.0 新增 **YouTube SABR 增强引擎**及配套令牌组件，改善只能�
 <details>
 <summary>运行桌面开发版</summary>
 
-建议使用 Node.js 22.12+、Python 3.12，以及提供 `ffmpeg`、`ffprobe` 的 FFmpeg 安装。
+建议使用 Node.js 22.13+（22.x）或 24+、Python 3.12，以及提供 `ffmpeg`、`ffprobe` 的 FFmpeg 安装。
 
 ```bash
 git clone https://github.com/henry1786580051-lang/MediaDrop.git
@@ -238,7 +238,7 @@ docker run --rm -p 127.0.0.1:8899:8899 \
 |------|------|
 | [Python 3.8+](https://www.python.org/) | 后端语言 |
 | [Flask 3.0](https://flask.palletsprojects.com/) | Web 框架 |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | 视频下载引擎；Windows 长期维护版锁定已验证的 nightly `2026.08.19` |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | 视频下载引擎；Windows 长期维护版内置官方稳定版 `2026.10.26` |
 | [ffmpeg](https://ffmpeg.org/) | 音视频转码 |
 | [Electron 33](https://www.electronjs.org/) | 桌面应用封装 |
 | HTML / CSS / JavaScript | 前端界面（原生，无框架） |
