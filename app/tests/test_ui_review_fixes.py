@@ -43,4 +43,5 @@ class UIReviewFixes(unittest.TestCase):
         with mock.patch.object(server.youtube_compat,'asset_root',return_value=root), mock.patch.object(server,'cached_ytdlp_version',return_value='sabr-fixture') as version:
             result=self.client.get('/api/engines').get_json()['youtube']
             version.assert_called_once_with(str(root/('yt-dlp-sabr.exe' if server.sys.platform == 'win32' else 'yt-dlp-sabr')))
-        self.assertEqual(result, {'mode':'sabr','version':'sabr-fixture','available':True,'update_method':'application'})
+        self.assertEqual(result, {'mode':'sabr','version':'sabr-fixture','available':True,'update_method':'independent',
+                                  'selected_id':'bundled','provider_version':None,'warning':None})

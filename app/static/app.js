@@ -351,16 +351,162 @@ function refreshYtdlpInstallButton() {
     : '安装所选版本';
 }
 
-async function loadEngineStatus() {
-  const output = document.getElementById('youtubeEngineVersion');
+let youtubeEngineState = { status: null, releases: [], busy: false };
+let youtubeEngineOperation = null;
+let youtubeEngineReloadRequested = false;
+
+function setYoutubeEngineMsg(kind, message) {
+  const output = document.getElementById('youtubeEngineMsg');
   if (!output) return;
-  try {
-    const res = await fetch('/api/engines');
-    if (!res.ok) throw new Error('engine status');
-    const { youtube } = await res.json();
-    output.textContent = youtube.available ? `${youtube.version || '版本未知'}${youtube.mode === 'sabr' ? ' · 使用中' : ' · 未启用'}` : '未安装';
-    document.getElementById('youtubeEngineUpdate').hidden = !window.electronAPI;
-  } catch { output.textContent = '暂时无法读取'; }
+  output.className = `settings-msg ${kind || ''}`;
+  output.textContent = message || '';
+}
+
+function refreshYoutubeEngineControls() {
+  const select = document.getElementById('youtubeEngineRelease');
+  if (!select) return;
+  const { status, releases, busy } = youtubeEngineState;
+  const selected = releases.find(release => release.id === select.value);
+  const current = Boolean(selected && selected.id === status?.selected_id);
+  select.disabled = busy || !releases.some(release => release.available);
+  const check = document.getElementById('checkYoutubeEngineBtn');
+  check.disabled = busy;
+  const update = document.getElementById('youtubeEngineUpdate');
+  update.disabled = busy || !selected?.available || current;
+  update.textContent = current ? '正在使用此版本'
+    : selected?.source === 'remote' && !selected.installed ? '下载安装并切换' : '切换到所选版本';
+  const bundled = releases.find(release => release.id === 'bundled');
+  document.getElementById('restoreYoutubeEngineBtn').disabled = busy || !bundled?.available || status?.selected_id === 'bundled';
+}
+
+function renderYoutubeEngineStatus(data, { remoteList = false, resetSelection = false } = {}) {
+  const select = document.getElementById('youtubeEngineRelease');
+  const previousSelection = select.value;
+  const localReleases = Array.isArray(data.releases) ? data.releases : [];
+  const localIds = new Set(localReleases.map(release => release.id));
+  const retainedRemote = remoteList ? [] : youtubeEngineState.releases.filter(release => release.source === 'remote' && !localIds.has(release.id));
+  const releases = [...localReleases, ...retainedRemote];
+  youtubeEngineState.status = { ...youtubeEngineState.status, ...data };
+  youtubeEngineState.releases = releases;
+  const status = youtubeEngineState.status;
+  document.getElementById('youtubeEngineVersion').textContent = status.available && status.current
+    ? `${status.current}${status.mode === 'sabr' ? ' · 使用中' : ' · 未启用'}` : '未安装';
+  const options = releases.map(release => {
+    const option = document.createElement('option');
+    option.value = release.id;
+    option.disabled = !release.available;
+    const source = release.source === 'bundled' ? '内置版' : release.installed || release.source === 'installed' ? '已下载' : '线上当前版';
+    option.textContent = [release.version || '版本未知', source,
+      release.id === status.selected_id ? '当前' : '', !release.available ? '不可用' : ''].filter(Boolean).join(' · ');
+    return option;
+  });
+  if (!options.length) {
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = '没有可用的已保存版本';
+    options.push(empty);
+  }
+  select.replaceChildren(...options);
+  const preferred = resetSelection ? status.selected_id : previousSelection;
+  select.value = releases.some(release => release.id === preferred && release.available) ? preferred
+    : releases.find(release => release.id === status.selected_id && release.available)?.id
+      || releases.find(release => release.available)?.id || '';
+  document.getElementById('youtubeEngineHistory').textContent = status.history_note
+    || '可获取线上当前版本，并选择此电脑已保存的历史版本。';
+  refreshYoutubeEngineControls();
+}
+
+async function youtubeEngineRequest(url, body) {
+  const res = await fetch(url, body === undefined ? undefined : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    const error = new Error(data.error || '无法读取增强引擎版本');
+    error.status = res.status;
+    error.code = data.error_code;
+    error.url = url;
+    throw error;
+  }
+  return data;
+}
+
+async function readYoutubeEngineStatus() {
+  const data = await youtubeEngineRequest('/api/youtube/version');
+  renderYoutubeEngineStatus(data);
+  return data;
+}
+
+function runYoutubeEngineOperation(work) {
+  if (youtubeEngineOperation) return youtubeEngineOperation;
+  youtubeEngineState.busy = true;
+  refreshYoutubeEngineControls();
+  youtubeEngineOperation = (async () => {
+    let failed = false;
+    const reportError = error => {
+      failed = true;
+      const busy = error.status === 409 || error.code === 'engine_busy';
+      // The download may have finished before a new task blocked activation.
+      // Reload saved versions without losing the actionable busy message.
+      if (busy && error.url === '/api/youtube/update') youtubeEngineReloadRequested = true;
+      if (!youtubeEngineState.status) document.getElementById('youtubeEngineVersion').textContent = '暂时无法读取';
+      setYoutubeEngineMsg('err', busy
+        ? '当前有任务正在进行，请等待解析或下载任务完成后重试。'
+        : `增强引擎操作失败：${friendlyError(error.message)}`);
+    };
+    try {
+      try { await work(); } catch (error) { reportError(error); }
+      // A mode change may request a status read while an install is in flight.
+      // Read it afterwards so an earlier response cannot overwrite the selected version.
+      while (youtubeEngineReloadRequested) {
+        youtubeEngineReloadRequested = false;
+        try { await readYoutubeEngineStatus(); } catch (error) { if (!failed) reportError(error); }
+      }
+    } finally {
+      youtubeEngineState.busy = false;
+      youtubeEngineOperation = null;
+      refreshYoutubeEngineControls();
+    }
+  })();
+  return youtubeEngineOperation;
+}
+
+function loadEngineStatus() {
+  if (!document.getElementById('youtubeEngineVersion')) return Promise.resolve();
+  if (youtubeEngineOperation) {
+    youtubeEngineReloadRequested = true;
+    return youtubeEngineOperation;
+  }
+  return runYoutubeEngineOperation(async () => {
+    const data = await readYoutubeEngineStatus();
+    if (data.warning) setYoutubeEngineMsg('err', data.warning);
+  });
+}
+
+function checkYoutubeEngine() {
+  return runYoutubeEngineOperation(async () => {
+    setYoutubeEngineMsg('', '正在获取增强引擎版本...');
+    const data = await youtubeEngineRequest('/api/youtube/releases');
+    renderYoutubeEngineStatus(data, { remoteList: true });
+    setYoutubeEngineMsg(data.warning ? 'err' : 'ok', data.warning || '版本列表已刷新，可选择线上当前版本或已保存版本。');
+  });
+}
+
+function updateYoutubeEngine(restoreBundled = false) {
+  if (youtubeEngineOperation) return youtubeEngineOperation;
+  const id = restoreBundled ? 'bundled' : document.getElementById('youtubeEngineRelease').value;
+  const selected = youtubeEngineState.releases.find(release => release.id === id);
+  if (!selected?.available) {
+    setYoutubeEngineMsg('err', '请先获取并选择可用的增强引擎版本。');
+    return Promise.resolve();
+  }
+  if (id === youtubeEngineState.status?.selected_id) return Promise.resolve();
+  return runYoutubeEngineOperation(async () => {
+    setYoutubeEngineMsg('', `${selected.source === 'remote' && !selected.installed ? '正在下载并切换' : '正在切换到'}增强引擎 ${selected.version || ''}...`);
+    const data = await youtubeEngineRequest('/api/youtube/update', { id });
+    renderYoutubeEngineStatus(data, { resetSelection: true });
+    setYoutubeEngineMsg(data.warning ? 'err' : 'ok', data.warning || `${id === 'bundled' ? '已恢复内置增强引擎' : '增强引擎已切换为'} ${data.current || selected.version}，请重新解析链接。`);
+  });
 }
 
 async function checkYtdlp() {
@@ -1505,6 +1651,9 @@ document.addEventListener('click', event => {
     case 'start-local-burn': void startLocalBurn(); break;
     case 'test-cookies': void testCookies(); break;
     case 'check-app-update': void checkAppUpdate(); break;
+    case 'check-youtube-engine': void checkYoutubeEngine(); break;
+    case 'update-youtube-engine': void updateYoutubeEngine(); break;
+    case 'restore-youtube-engine': void updateYoutubeEngine(true); break;
     case 'check-ytdlp': void checkYtdlp(); break;
     case 'update-ytdlp': void updateYtdlp(); break;
     case 'export-diagnostics': exportDiagnostics(); break;
@@ -1537,6 +1686,7 @@ document.addEventListener('change', event => {
     case 'change-auth-mode': void changeAuthMode(); break;
     case 'change-ytdlp-channel': void checkYtdlp(); break;
     case 'change-ytdlp-release': refreshYtdlpInstallButton(); break;
+    case 'change-youtube-engine-release': refreshYoutubeEngineControls(); break;
     case 'save-youtube-mode': void postConfig({ youtube_enhanced: target.value === 'enhanced' }, '已更新 YouTube 模式，请重新解析链接').then(loadEngineStatus); break;
     case 'save-cookies': void saveCookies(); break;
     case 'set-subtitle-mode':

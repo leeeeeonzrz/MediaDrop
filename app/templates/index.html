@@ -173,8 +173,22 @@
           </div>
         </div>
         <div class="status-line"><span>YouTube 增强引擎</span><strong id="youtubeEngineVersion">正在读取</strong></div>
-        <p class="field-help">增强引擎与配套组件随 MediaDrop 一起更新，更新标准引擎不会替换它。</p>
-        <div class="tool-actions"><button class="secondary-btn" id="youtubeEngineUpdate" type="button" data-click-action="check-app-update" hidden>检查增强引擎更新（应用更新）</button></div>
+        <label class="field">
+          <span class="field-label">增强引擎版本</span>
+          <span class="field-control">
+            <select id="youtubeEngineRelease" data-change-action="change-youtube-engine-release" disabled>
+              <option value="">正在读取已保存版本...</option>
+            </select>
+          </span>
+          <span class="field-help">已下载版本会保留，可切回内置版；有任务时先等待完成。</span>
+        </label>
+        <p class="field-help" id="youtubeEngineHistory">可获取线上当前版本，并选择此电脑已保存的历史版本。</p>
+        <div class="tool-actions">
+          <button class="secondary-btn" id="checkYoutubeEngineBtn" type="button" data-click-action="check-youtube-engine">获取增强引擎版本</button>
+          <button class="primary-btn" id="youtubeEngineUpdate" type="button" data-click-action="update-youtube-engine" disabled>切换到所选版本</button>
+          <button class="secondary-btn" id="restoreYoutubeEngineBtn" type="button" data-click-action="restore-youtube-engine" disabled>恢复内置版</button>
+        </div>
+        <div class="settings-msg" id="youtubeEngineMsg" role="status" aria-live="polite"></div>
         <div class="status-line">
           <span>标准引擎 · yt-dlp</span>
           <strong id="ytdlpVersion">尚未检查</strong>

@@ -1442,6 +1442,7 @@ class PersistenceAndApiTests(unittest.TestCase):
             "PATH": "test-path",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
         })
 
     def test_electron_node_is_passed_to_ytdlp_as_javascript_runtime(self):

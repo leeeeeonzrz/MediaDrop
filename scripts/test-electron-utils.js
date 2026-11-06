@@ -89,7 +89,7 @@ const packageConfig = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "pac
 assert(packageConfig.engines.node === "^22.13.0 || >=24.0.0", "Node runtime requirement is not compatible with the bundled provider");
 assert(packageConfig.devDependencies.electron === "41.10.3", "Electron version is not pinned");
 assert(packageConfig.devDependencies["electron-builder"] === "26.15.3", "electron-builder version is not pinned");
-assert(packageConfig.version === "1.3.1-windows.2", "Windows fork release version is not pinned");
+assert(packageConfig.version === "1.3.1-windows.3", "Windows fork release version is not pinned");
 assert(!packageConfig.build.files.some((entry) => entry.startsWith("app/")), "Web source leaked into Electron app.asar");
 assert(!packageConfig.build.extraResources.some((entry) => entry.to === "app"), "Web resources were packaged twice");
 assert(packageConfig.build.extraResources.some((entry) => entry.to === "bin"), "Bundled runtime binaries are missing");

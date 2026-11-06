@@ -7,14 +7,23 @@ import subprocess
 import sys
 import threading
 
+try:
+    import enhanced_engine
+except ImportError:
+    from app import enhanced_engine
+
 
 def asset_root():
     base = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent.parent / 'bundled-bin'
     return base / 'youtube'
 
 
-def engine_path():
-    return asset_root() / ('yt-dlp-sabr.exe' if sys.platform == 'win32' else 'yt-dlp-sabr')
+def engine_path(data_dir=None):
+    if data_dir is None:
+        data_dir = os.environ.get('MEDIADROP_DATA_DIR') or (
+            str(Path(sys.executable).parent) if getattr(sys, 'frozen', False)
+            else str(Path(__file__).resolve().parent))
+    return enhanced_engine.manager(data_dir, asset_root()).selected_path()
 
 
 def default_enabled():
@@ -86,9 +95,9 @@ provider = Provider()
 atexit.register(provider.close)
 
 
-def command(runtime):
+def command(runtime, data_dir=None):
     root = asset_root()
-    binary = engine_path()
+    binary = engine_path(data_dir)
     if sys.platform == 'win32':
         runtime = str(root / 'node.exe')
     if not runtime or not os.path.isfile(runtime) or not binary.is_file() or not (root / 'server/build/main.js').is_file():

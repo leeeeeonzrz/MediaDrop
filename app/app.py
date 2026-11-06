@@ -32,6 +32,7 @@ try:
     from player_script_cache import PlayerScriptCache
     from parse_jobs import ParseJobs, ParseCancelled
     import youtube_compat
+    import enhanced_engine
     from hdr_metadata import describe_format, inspect_file
     from data_lock import DataDirectoryLock
     from job_store import ACTIVE_STATUSES, JobStore, is_recoverable_job
@@ -41,6 +42,7 @@ except ImportError:
     from app.player_script_cache import PlayerScriptCache
     from app.parse_jobs import ParseJobs, ParseCancelled
     from app import youtube_compat
+    from app import enhanced_engine
     from app.hdr_metadata import describe_format, inspect_file
     from app.data_lock import DataDirectoryLock
     from app.job_store import ACTIVE_STATUSES, JobStore, is_recoverable_job
@@ -132,7 +134,7 @@ def get_extractor_command(url, engine=None):
     if engine in ("sabr", "standard"):
         enabled = engine == "sabr"
     if youtube and enabled:
-        return youtube_compat.command(os.environ.get("MEDIADROP_JS_RUNTIME")), "sabr"
+        return youtube_compat.command(os.environ.get("MEDIADROP_JS_RUNTIME"), data_dir=get_base_dir()), "sabr"
     return [get_ytdlp_path()], "standard"
 
 
@@ -195,6 +197,41 @@ CACHE_DIR_NAME = ".mediadrop-cache"
 shutdown_event = threading.Event()
 _job_store = None
 _job_store_path = None
+engine_activity_gate = enhanced_engine.ActivityGate()
+
+
+def enhanced_engine_manager():
+    return enhanced_engine.manager(get_base_dir(), youtube_compat.asset_root())
+
+
+def engine_activity(handler):
+    @wraps(handler)
+    def guarded(*args, **kwargs):
+        try:
+            with engine_activity_gate.activity():
+                return handler(*args, **kwargs)
+        except enhanced_engine.EngineBusy as exc:
+            return jsonify({'error': str(exc), 'error_code': 'engine_busy'}), 409
+    return guarded
+
+
+def engine_tasks_busy():
+    # Called while the gate excludes new submissions. Follow the established
+    # queue -> jobs order; queued, paused and still-finishing workers all count.
+    with queue_lock, jobs_lock:
+        return bool(download_queue or active_downloads or
+                    any(job.get('status') in ACTIVE_STATUSES for job in jobs.values()))
+
+
+def enhanced_engine_status(remote=False):
+    manager = enhanced_engine_manager()
+    status = manager.releases(proxy=enhanced_engine_proxy()) if remote else manager.local_status()
+    status['mode'] = 'sabr' if load_config().get('youtube_enhanced', youtube_compat.default_enabled()) else 'standard'
+    return status
+
+
+def enhanced_engine_proxy():
+    return get_proxy_url() if load_config().get('proxy_url') else None
 
 
 class DownloadStopped(Exception):
@@ -1404,6 +1441,7 @@ def get_ytdlp_env():
     env.pop("PYTHONPATH", None)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.pop('MEDIADROP_PLAYER_CACHE_URL', None)
     env.pop('MEDIADROP_PLAYER_CACHE_TOKEN', None)
     env.update(player_script_cache.environment())
@@ -1895,7 +1933,8 @@ def info_cache_key(url, engine, skip_cookies=False, cfg=None):
         cookie_stamp = (stat.st_size, stat.st_mtime_ns) if stat else None
     except OSError:
         cookie_stamp = None
-    return (get_base_dir(), url, engine, bool(skip_cookies), cfg.get('cookies_browser', ''),
+    engine_stamp = enhanced_engine_manager().fingerprint() if engine == 'sabr' else None
+    return (get_base_dir(), url, engine, engine_stamp, bool(skip_cookies), cfg.get('cookies_browser', ''),
             cookie_file, cookie_stamp, cfg.get('proxy_url', ''))
 
 
@@ -3056,6 +3095,7 @@ def run_info_process(command, **kwargs):
 
 
 @app.route("/api/info", methods=["POST"])
+@engine_activity
 @cancellable_info
 def get_info():
     data = request.json
@@ -3206,6 +3246,7 @@ def get_info():
 
 
 @app.route("/api/download", methods=["POST"])
+@engine_activity
 def start_download():
     data = request.get_json(silent=True) or {}
     url = data.get("url", "").strip()
@@ -3276,6 +3317,7 @@ def start_download():
 
 
 @app.route("/api/local-burn", methods=["POST"])
+@engine_activity
 def start_local_subtitle_burn():
     data = request.get_json(silent=True) or {}
     try:
@@ -3353,6 +3395,7 @@ def download_file(job_id):
 
 
 @app.route("/api/pause/<job_id>", methods=["POST"])
+@engine_activity
 def pause_download(job_id):
     try:
         with jobs_lock:
@@ -3465,6 +3508,7 @@ def locate_job_file(job_id):
 
 
 @app.route("/api/jobs/<job_id>/retry", methods=["POST"])
+@engine_activity
 def retry_job(job_id):
     with queue_lock, jobs_lock:
         if job_id in active_downloads:
@@ -3553,13 +3597,53 @@ def reorder_queue():
 
 @app.route("/api/engines")
 def engine_status():
-    binary = youtube_compat.engine_path()
+    binary = youtube_compat.engine_path(get_base_dir())
+    status = enhanced_engine_status()
     enabled = load_config().get("youtube_enhanced", youtube_compat.default_enabled())
     return jsonify({"youtube": {
         "mode": "sabr" if enabled else "standard",
         "version": cached_ytdlp_version(str(binary)) if binary.is_file() else None,
-        "available": binary.is_file(), "update_method": "application",
+        "available": binary.is_file(), "update_method": "independent",
+        "selected_id": status['selected_id'], "provider_version": status['provider_version'],
+        "warning": status['warning'],
     }})
+
+
+@app.route('/api/youtube/version')
+def youtube_version():
+    return jsonify(enhanced_engine_status())
+
+
+@app.route('/api/youtube/releases')
+def youtube_releases():
+    return jsonify(enhanced_engine_status(remote=True))
+
+
+@app.route('/api/youtube/update', methods=['POST'])
+def youtube_update():
+    try:
+        data = request.get_json(silent=True)
+        ident = data.get('id') if isinstance(data, dict) else None
+        if not isinstance(ident, str):
+            raise enhanced_engine.InvalidEngine('请选择一个增强引擎版本。')
+        # Fail fast if already busy, but do not freeze normal use while an
+        # immutable candidate is downloaded and verified.
+        with engine_activity_gate.update(engine_tasks_busy):
+            pass
+        manager = enhanced_engine_manager()
+        manager.prepare(ident, proxy=enhanced_engine_proxy())
+        # New work may have started during preparation. Keep the verified
+        # version in local history and leave selection untouched in that case.
+        with engine_activity_gate.update(engine_tasks_busy):
+            status = manager.activate(ident)
+        status['mode'] = 'sabr' if load_config().get('youtube_enhanced', youtube_compat.default_enabled()) else 'standard'
+        return jsonify(status)
+    except enhanced_engine.EngineBusy as exc:
+        return jsonify({'error': str(exc), 'error_code': 'engine_busy'}), 409
+    except enhanced_engine.InvalidEngine as exc:
+        return jsonify({'error': str(exc), 'error_code': 'invalid_engine'}), 400
+    except Exception as exc:
+        return jsonify({'error': '增强引擎更新失败，已保留原版本：' + str(exc), 'error_code': 'engine_update_failed'}), 502
 
 
 @app.route("/api/ytdlp/version")
@@ -3615,6 +3699,7 @@ def ytdlp_update():
 
 
 @app.route("/api/test-cookies", methods=["POST"])
+@engine_activity
 def test_cookies():
     data = request.json or {}
     url = data.get("url", "").strip() or "https://www.youtube.com/watch?v=jNQXAC9IVRw"
