@@ -18,10 +18,15 @@ from app import youtube_compat
 
 atexit.unregister(server.cleanup_all_jobs)
 VERSION = '2026.10.27.135913'
+TEST_ENGINE_ASSET = ('yt-dlp_win.zip', 'yt-dlp.exe')
 
 
 class EngineInstallTests(unittest.TestCase):
     def setUp(self):
+        # Exercise the Windows archive fixture independently of the CI host.
+        asset_patch = mock.patch.object(engines, 'engine_asset', return_value=TEST_ENGINE_ASSET)
+        self.addCleanup(asset_patch.stop)
+        asset_patch.start()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -200,7 +205,8 @@ class EngineArchiveTests(unittest.TestCase):
                 with self.assertRaises(engines.InvalidEngine):
                     engines.safe_extract(io.BytesIO(data.getvalue()), Path(temporary) / 'invalid')
 
-    def test_only_exact_official_channel_asset_and_checksum_are_accepted(self):
+    @mock.patch.object(engines, 'engine_asset', return_value=TEST_ENGINE_ASSET)
+    def test_only_exact_official_channel_asset_and_checksum_are_accepted(self, _asset):
         asset, _ = engines.engine_asset()
         payload = {'tag_name': 'sabr', 'name': 'sabr ' + VERSION, 'draft': False,
                    'assets': [{'name': asset, 'size': 1024, 'browser_download_url': engines.RELEASE_BASE + asset, 'digest': 'sha256:' + 'a'*64},
@@ -219,6 +225,13 @@ class EngineArchiveTests(unittest.TestCase):
             engines.TrustedRedirect().redirect_request(None, None, 302, '', {}, 'https://evil.test/file')
         for version in ('2026.99.99.999999', '../2026.10.27.135913', '2026.10.27'):
             with self.assertRaises(engines.InvalidEngine): engines.valid_version(version)
+
+
+class EnginePlatformTests(unittest.TestCase):
+    def test_linux_independent_install_has_explicit_unsupported_error(self):
+        with mock.patch.object(engines, 'sys', mock.Mock(platform='linux')):
+            with self.assertRaisesRegex(engines.InvalidEngine, '当前平台不支持独立安装增强引擎'):
+                engines.engine_asset()
 
 
 class EngineApiConcurrencyTests(unittest.TestCase):
